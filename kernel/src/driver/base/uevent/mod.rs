@@ -81,7 +81,7 @@ pub const UEVENT_HELPER_PATH_LEN: usize = 256;
     buflen，访问buf的变量。
 
 */
-// 表示一个待发送的uevent
+/// 表示一个待发送的uevent
 pub struct KobjUeventEnv {
     argv: Vec<Option<String>>,
     envp: Vec<Option<String>>,

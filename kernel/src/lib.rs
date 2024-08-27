@@ -106,8 +106,8 @@ pub static KERNEL_ALLOCATOR: KernelAllocator = KernelAllocator;
 pub fn panic(info: &PanicInfo) -> ! {
     use log::error;
 
-    error!("Kernel Panic Occurred.");
-
+    //error!("Kernel Panic Occurred.");
+    error!("{:?}",info);
     match info.location() {
         Some(loc) => {
             println!(

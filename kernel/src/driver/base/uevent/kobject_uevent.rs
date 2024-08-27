@@ -95,7 +95,10 @@ add_uevent_var，以格式化字符的形式（类似printf、printk等），将
 kobject_action_type，将enum kobject_action类型的Action，转换为字符串
 */
 
-//kobject_uevent->kobject_uevent_env
+fn kobject_uevent_init(){
+    
+}
+// kobject_uevent->kobject_uevent_env
 pub fn kobject_uevent(kobj: Arc<dyn KObject>, action: KobjectAction) -> Result<(), SystemError> {
     // kobject_uevent和kobject_uevent_env功能一样，只是没有指定任何的环境变量
     match kobject_uevent_env(kobj, action, None) {

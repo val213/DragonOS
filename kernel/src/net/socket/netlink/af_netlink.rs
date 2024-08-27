@@ -38,6 +38,7 @@ use crate::net::socket::{AddressFamily, PosixSocketHandleItem, Socket, SocketMet
 use lazy_static::lazy_static;
 
 use super::callback::NetlinkCallback;
+use super::endpoint::NetlinkEndpoint;
 use super::netlink::{NETLINK_USERSOCK, NL_CFG_F_NONROOT_SEND};
 use super::netlink_proto::{proto_register, Proto, NETLINK_PROTO};
 use super::skbuff::{netlink_overrun, skb_orphan, skb_shared};
@@ -592,7 +593,27 @@ impl Socket for NetlinkSock{
         self
     }
     fn read(&self, buf: &mut [u8]) -> (Result<usize, SystemError>, Endpoint) {
-        todo!()
+        let mut buffer = self.data.lock();
+        let msg = buffer.remove(0);
+        let len = msg.len();
+        if !msg.is_empty() {
+            data[..len].copy_from_slice(&msg[..len]);
+            (
+                Ok(len),
+                Endpoint::Netlink(NetlinkEndpoint {
+                    port_id: 0,
+                    multicast_groups_mask: 0,
+                }),
+            )
+        } else {
+            (
+                Ok(0),
+                Endpoint::Netlink(NetlinkEndpoint {
+                    port_id: 0,
+                    multicast_groups_mask: 0,
+                }),
+            )
+        }
     }
     fn write(&self, buf: &[u8], to: Option<Endpoint>) -> Result<usize, SystemError>{
         // Implementation of the function
