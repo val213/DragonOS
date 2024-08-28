@@ -2,6 +2,7 @@
 
 
 
+use core::cmp::{max, min};
 use core::ops::Deref;
 use core::{any::Any, fmt::Debug, hash::Hash};
 use core::mem;
@@ -24,7 +25,7 @@ use crate::libs::wait_queue::WaitQueue;
 use crate::net::event_poll::{EPollEventType, EPollItem, EventPoll};
 use crate::net::socket::handle::GlobalSocketHandle;
 use crate::net::socket::netlink::skbuff::SkBuff;
-use crate::net::syscall::SockAddrNl;
+use crate::net::syscall::{MsgHdr, SockAddrNl};
 use crate::net::{Endpoint, ShutdownType};
 use crate::time::timer::schedule_timeout;
 use crate::{
@@ -41,7 +42,7 @@ use super::callback::NetlinkCallback;
 use super::endpoint::NetlinkEndpoint;
 use super::netlink::{NETLINK_USERSOCK, NL_CFG_F_NONROOT_SEND};
 use super::netlink_proto::{proto_register, Proto, NETLINK_PROTO};
-use super::skbuff::{netlink_overrun, skb_orphan, skb_shared};
+use super::skbuff::{self, netlink_overrun, skb_orphan, skb_shared};
 use super::sock::SockFlags;
 use crate::init::initcall::INITCALL_CORE;
 use crate::net::socket::netlink::netlink::NetlinkState;
@@ -593,31 +594,12 @@ impl Socket for NetlinkSock{
         self
     }
     fn read(&self, buf: &mut [u8]) -> (Result<usize, SystemError>, Endpoint) {
-        let mut buffer = self.data.lock();
-        let msg = buffer.remove(0);
-        let len = msg.len();
-        if !msg.is_empty() {
-            data[..len].copy_from_slice(&msg[..len]);
-            (
-                Ok(len),
-                Endpoint::Netlink(NetlinkEndpoint {
-                    port_id: 0,
-                    multicast_groups_mask: 0,
-                }),
-            )
-        } else {
-            (
-                Ok(0),
-                Endpoint::Netlink(NetlinkEndpoint {
-                    port_id: 0,
-                    multicast_groups_mask: 0,
-                }),
-            )
-        }
+        // netlink_recvmsg
+        return self.try_recv();
     }
     fn write(&self, buf: &[u8], to: Option<Endpoint>) -> Result<usize, SystemError>{
-        // Implementation of the function
-        Ok(0)
+        // netlink_sendmsg
+        return self.try_send(buf);
     }
     fn connect(&mut self, _endpoint: Endpoint) -> Result<(), SystemError>{
         // Implementation of the function
@@ -836,14 +818,78 @@ impl NetlinkSock {
     pub fn get_sk(&self) -> &Weak<dyn NetlinkSocket> {
         self.sk.as_ref().unwrap()
     }
-    fn send(&self, msg: &[u8]) -> Result<(), SystemError> {
+    fn try_send(&self, msg: &[u8]) -> Result<usize, SystemError> {
         // Implementation of the function
-        Ok(())
+        Ok(0)
     }
 
-    fn recv(&self) -> Result<Vec<u8>, SystemError> {
+    fn try_recv(&self) -> (Result<usize, SystemError>, Endpoint) {
         // Implementation of the function
-        Ok(Vec::new())
+        let sk:Arc<Mutex<Box<dyn NetlinkSocket>>> = Arc::new(Mutex::new(Box::new(NetlinkSock::new())));
+        
+        let nlk: Arc<NetlinkSock> = Arc::clone(&sk).arc_any().downcast().map_err(|_| SystemError::EINVAL)?;
+        let err:usize = 0;
+        if self.flags==1{
+            return (Err(SystemError::EOPNOTSUPP_OR_ENOTSUP), Endpoint::new());
+        }
+        let copied:usize = 0;
+    
+        let skb = skb_recv_datagram(sk, flags, &err);
+        let data_skb: SkBuff = SkBuff::new();
+        if skb.is_empty(){
+            netlink_rcv_wake(sk);
+            if err != 0 {
+                return Err(SystemError::from(err));
+            } else {
+                return Ok(copied);
+            }
+        }
+    
+        data_skb = skb;
+
+        nlk.max_recvmsg_len = max(nlk.max_recvmsg_len, len);
+        // min_t(size_t, nlk.max_recvmsg_len,SKB_WITH_OVERHEAD(32768))
+        nlk.max_recvmsg_len = min(nlk.max_recvmsg_len,32768);
+
+        copied = data_skb.len;
+        if len < copied {
+            msg.msg_flags |= MSG_TRUNC;
+            copied = len;
+        }
+
+        err = skb_copy_datagram_msg(data_skb, 0, msg, copied);
+
+        if msg.msg_name {
+            DECLARE_SOCKADDR(struct sockaddr_nl *, addr, msg->msg_name);
+            addr.nl_family = AddressFamily::NETLINK;
+            addr.nl_pad    = 0;
+            addr.nl_pid	= NETLINK_CB(skb).portid;
+            addr.nl_groups	= netlink_group_mask(NETLINK_CB(skb).dst_group);
+            msg.msg_namelen = sizeof(*addr);
+        }
+
+        if (nlk.flags & NETLINK_F_RECV_PKTINFO)
+            netlink_cmsg_recv_pktinfo(msg, skb);
+        if (nlk.flags & NETLINK_F_LISTEN_ALL_NSID)
+            netlink_cmsg_listen_all_nsid(sk, msg, skb);
+
+        memset(&scm, 0, sizeof(scm));
+        scm.creds = *NETLINK_CREDS(skb);
+        if (flags & MSG_TRUNC)
+            copied = data_skb.len;
+
+        skb_free_datagram(sk, skb);
+
+        if (nlk.cb_running &&
+            atomic_read(&sk.sk_rmem_alloc) <= sk.sk_rcvbuf / 2) {
+            ret = netlink_dump(sk);
+            if (ret) {
+                sk.sk_err = -ret;
+                sk_error_report(sk);
+            }
+        }
+
+        // scm_recv(sock, msg, &scm, flags);
     }
 
     fn bind(&self) -> Result<(), SystemError> {
@@ -1385,4 +1431,12 @@ fn netlink_getsockbyportid(ssk: Arc<Mutex<Box<dyn NetlinkSocket>>>, portid: u32)
         return Err(SystemError::ECONNREFUSED);
 	}
 	return Ok(sock);
+}
+
+fn netlink_recvmsg(sock: Arc<Mutex<Box<dyn NetlinkSocket>>>, msg: &mut MsgHdr, len:usize,flags:u32){
+
+}
+
+fn netlink_sendmsg(sock: Arc<Mutex<Box<dyn NetlinkSocket>>>, msg: &mut MsgHdr, len:usize,flags:u32){
+
 }

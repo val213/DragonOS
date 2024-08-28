@@ -1,7 +1,9 @@
 use alloc::{boxed::Box, sync::Arc};
 use crate::libs::{mutex::Mutex, rwlock::RwLock};
 use super::af_netlink::{NetlinkSock, NetlinkSocket};
-// 曾用方案：在 smoltcp::PacketBuffer 的基础上封装了一层，用于处理 netlink 协议中网络数据包(skb)的相关操作
+// 曾弃用方案：在 smoltcp::PacketBuffer 的基础上封装了一层，用于处理 netlink 协议中网络数据包(skb)的相关操作
+/// SkBuff 中的宏 https://code.dragonos.org.cn/xref/linux-6.1.9/include/linux/skbuff.h?fi=SKB_WITH_OVERHEAD#261
+
 #[derive(Debug)]
 #[derive(Clone)]
 pub struct SkBuff {

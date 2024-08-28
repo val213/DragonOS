@@ -1,4 +1,4 @@
-use nix::sys::socket::{bind, recvmsg, sendmsg, sendto, socket, AddressFamily, MsgFlags, RecvMsg, SockAddr, SockFlag, SockProtocol, SockType};
+use nix::sys::socket::{bind, recvfrom, recvmsg, sendmsg, sendto, socket, AddressFamily, MsgFlags, RecvMsg, SockAddr, SockFlag, SockProtocol, SockType};
 use nix::unistd::getpid;
 use nix::errno::Errno;
 use std::io::{IoSlice, IoSliceMut};
@@ -34,9 +34,8 @@ fn send_uevent(sock: RawFd, message: &str) -> Result<(), Errno> {
 
 fn receive_uevent(sock: RawFd) -> Result<String, Errno> {
     let mut buf = [0u8; 1024];
-    let mut iov = [IoSliceMut::new(&mut buf)];
-    let msg: RecvMsg<()> = recvmsg(sock, &mut iov, None, MsgFlags::empty())?;
-    let len = msg.bytes;
+    let (len, addr): (usize, Option<SockAddr>) = recvfrom(sock, &mut buf)?;
+    let _addr = addr.ok_or(Errno::EAGAIN)?; // 处理 Option<SockAddr>
     Ok(String::from_utf8_lossy(&buf[..len]).to_string())
 }
 
