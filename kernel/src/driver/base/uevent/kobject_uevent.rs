@@ -34,6 +34,7 @@ use alloc::vec::Vec;
 use num::Zero;
 
 use super::KObject;
+use crate::driver::base::kset::KSet;
 use super::KobjUeventEnv;
 use super::KobjectAction;
 use super::{UEVENT_BUFFER_SIZE, UEVENT_NUM_ENVP};
@@ -113,7 +114,7 @@ pub fn kobject_uevent_env(
 ) -> Result<i32, SystemError> {
     log::info!("kobject_uevent_env: kobj: {:?}, action: {:?}", kobj, action);
     let mut state = KObjectState::empty();
-    let mut top_kobj = kobj.parent().unwrap().upgrade().unwrap();
+    let mut top_kobj = kobj.clone();
     let mut retval: i32;
     let action_string = match action {
         KobjectAction::KOBJADD => "add".to_string(),

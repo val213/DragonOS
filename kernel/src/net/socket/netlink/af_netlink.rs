@@ -824,72 +824,7 @@ impl NetlinkSock {
     }
 
     fn try_recv(&self) -> (Result<usize, SystemError>, Endpoint) {
-        // Implementation of the function
-        let sk:Arc<Mutex<Box<dyn NetlinkSocket>>> = Arc::new(Mutex::new(Box::new(NetlinkSock::new())));
-        
-        let nlk: Arc<NetlinkSock> = Arc::clone(&sk).arc_any().downcast().map_err(|_| SystemError::EINVAL)?;
-        let err:usize = 0;
-        if self.flags==1{
-            return (Err(SystemError::EOPNOTSUPP_OR_ENOTSUP), Endpoint::new());
-        }
-        let copied:usize = 0;
-    
-        let skb = skb_recv_datagram(sk, flags, &err);
-        let data_skb: SkBuff = SkBuff::new();
-        if skb.is_empty(){
-            netlink_rcv_wake(sk);
-            if err != 0 {
-                return Err(SystemError::from(err));
-            } else {
-                return Ok(copied);
-            }
-        }
-    
-        data_skb = skb;
-
-        nlk.max_recvmsg_len = max(nlk.max_recvmsg_len, len);
-        // min_t(size_t, nlk.max_recvmsg_len,SKB_WITH_OVERHEAD(32768))
-        nlk.max_recvmsg_len = min(nlk.max_recvmsg_len,32768);
-
-        copied = data_skb.len;
-        if len < copied {
-            msg.msg_flags |= MSG_TRUNC;
-            copied = len;
-        }
-
-        err = skb_copy_datagram_msg(data_skb, 0, msg, copied);
-
-        if msg.msg_name {
-            DECLARE_SOCKADDR(struct sockaddr_nl *, addr, msg->msg_name);
-            addr.nl_family = AddressFamily::NETLINK;
-            addr.nl_pad    = 0;
-            addr.nl_pid	= NETLINK_CB(skb).portid;
-            addr.nl_groups	= netlink_group_mask(NETLINK_CB(skb).dst_group);
-            msg.msg_namelen = sizeof(*addr);
-        }
-
-        if (nlk.flags & NETLINK_F_RECV_PKTINFO)
-            netlink_cmsg_recv_pktinfo(msg, skb);
-        if (nlk.flags & NETLINK_F_LISTEN_ALL_NSID)
-            netlink_cmsg_listen_all_nsid(sk, msg, skb);
-
-        memset(&scm, 0, sizeof(scm));
-        scm.creds = *NETLINK_CREDS(skb);
-        if (flags & MSG_TRUNC)
-            copied = data_skb.len;
-
-        skb_free_datagram(sk, skb);
-
-        if (nlk.cb_running &&
-            atomic_read(&sk.sk_rmem_alloc) <= sk.sk_rcvbuf / 2) {
-            ret = netlink_dump(sk);
-            if (ret) {
-                sk.sk_err = -ret;
-                sk_error_report(sk);
-            }
-        }
-
-        // scm_recv(sock, msg, &scm, flags);
+        todo!()
     }
 
     fn bind(&self) -> Result<(), SystemError> {
