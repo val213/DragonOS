@@ -220,7 +220,7 @@ impl DriverManager {
             })?;
 
         // todo: 发送uevent，类型问题
-        let _ = kobject_uevent(driver.clone() as Arc<dyn KObject>, KobjectAction::KOBJADD);
+        // let _ = kobject_uevent(driver.clone() as Arc<dyn KObject>, KobjectAction::KOBJADD);
         // deferred_probe_extend_timeout();
 
         return Ok(());
