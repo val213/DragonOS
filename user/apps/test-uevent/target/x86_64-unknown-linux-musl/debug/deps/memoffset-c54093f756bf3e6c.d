@@ -1,0 +1,10 @@
+/home/val213/DragonOS/user/apps/test-uevent/target/x86_64-unknown-linux-musl/debug/deps/libmemoffset-c54093f756bf3e6c.rmeta: /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/memoffset-0.6.5/src/lib.rs /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/memoffset-0.6.5/src/raw_field.rs /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/memoffset-0.6.5/src/offset_of.rs /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/memoffset-0.6.5/src/span_of.rs
+
+/home/val213/DragonOS/user/apps/test-uevent/target/x86_64-unknown-linux-musl/debug/deps/libmemoffset-c54093f756bf3e6c.rlib: /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/memoffset-0.6.5/src/lib.rs /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/memoffset-0.6.5/src/raw_field.rs /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/memoffset-0.6.5/src/offset_of.rs /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/memoffset-0.6.5/src/span_of.rs
+
+/home/val213/DragonOS/user/apps/test-uevent/target/x86_64-unknown-linux-musl/debug/deps/memoffset-c54093f756bf3e6c.d: /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/memoffset-0.6.5/src/lib.rs /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/memoffset-0.6.5/src/raw_field.rs /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/memoffset-0.6.5/src/offset_of.rs /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/memoffset-0.6.5/src/span_of.rs
+
+/home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/memoffset-0.6.5/src/lib.rs:
+/home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/memoffset-0.6.5/src/raw_field.rs:
+/home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/memoffset-0.6.5/src/offset_of.rs:
+/home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/memoffset-0.6.5/src/span_of.rs:

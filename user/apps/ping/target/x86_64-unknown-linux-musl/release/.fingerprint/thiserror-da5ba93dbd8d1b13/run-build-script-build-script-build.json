@@ -1,0 +1,1 @@
+{"rustc":14754903768538930322,"features":"","declared_features":"","target":0,"profile":0,"path":0,"deps":[[1047045513444739399,"build_script_build",false,6229810825119963411]],"local":[{"RerunIfChanged":{"output":"x86_64-unknown-linux-musl/release/build/thiserror-da5ba93dbd8d1b13/output","paths":["build/probe.rs"]}}],"rustflags":[],"metadata":0,"config":0,"compile_kind":0}

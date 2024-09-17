@@ -1,0 +1,14 @@
+/home/val213/DragonOS/user/apps/test-uevent/target/debug/deps/libclang_sys-74a8f056f7de41bd.rmeta: /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/clang-sys-1.8.1/src/lib.rs /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/clang-sys-1.8.1/src/support.rs /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/clang-sys-1.8.1/src/link.rs /home/val213/DragonOS/user/apps/test-uevent/target/debug/build/clang-sys-dd648c38ea97d74f/out/macros.rs /home/val213/DragonOS/user/apps/test-uevent/target/debug/build/clang-sys-dd648c38ea97d74f/out/common.rs /home/val213/DragonOS/user/apps/test-uevent/target/debug/build/clang-sys-dd648c38ea97d74f/out/dynamic.rs
+
+/home/val213/DragonOS/user/apps/test-uevent/target/debug/deps/libclang_sys-74a8f056f7de41bd.rlib: /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/clang-sys-1.8.1/src/lib.rs /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/clang-sys-1.8.1/src/support.rs /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/clang-sys-1.8.1/src/link.rs /home/val213/DragonOS/user/apps/test-uevent/target/debug/build/clang-sys-dd648c38ea97d74f/out/macros.rs /home/val213/DragonOS/user/apps/test-uevent/target/debug/build/clang-sys-dd648c38ea97d74f/out/common.rs /home/val213/DragonOS/user/apps/test-uevent/target/debug/build/clang-sys-dd648c38ea97d74f/out/dynamic.rs
+
+/home/val213/DragonOS/user/apps/test-uevent/target/debug/deps/clang_sys-74a8f056f7de41bd.d: /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/clang-sys-1.8.1/src/lib.rs /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/clang-sys-1.8.1/src/support.rs /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/clang-sys-1.8.1/src/link.rs /home/val213/DragonOS/user/apps/test-uevent/target/debug/build/clang-sys-dd648c38ea97d74f/out/macros.rs /home/val213/DragonOS/user/apps/test-uevent/target/debug/build/clang-sys-dd648c38ea97d74f/out/common.rs /home/val213/DragonOS/user/apps/test-uevent/target/debug/build/clang-sys-dd648c38ea97d74f/out/dynamic.rs
+
+/home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/clang-sys-1.8.1/src/lib.rs:
+/home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/clang-sys-1.8.1/src/support.rs:
+/home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/clang-sys-1.8.1/src/link.rs:
+/home/val213/DragonOS/user/apps/test-uevent/target/debug/build/clang-sys-dd648c38ea97d74f/out/macros.rs:
+/home/val213/DragonOS/user/apps/test-uevent/target/debug/build/clang-sys-dd648c38ea97d74f/out/common.rs:
+/home/val213/DragonOS/user/apps/test-uevent/target/debug/build/clang-sys-dd648c38ea97d74f/out/dynamic.rs:
+
+# env-dep:OUT_DIR=/home/val213/DragonOS/user/apps/test-uevent/target/debug/build/clang-sys-dd648c38ea97d74f/out

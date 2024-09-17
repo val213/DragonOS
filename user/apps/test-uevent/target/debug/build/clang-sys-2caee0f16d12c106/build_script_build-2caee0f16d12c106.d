@@ -1,0 +1,9 @@
+/home/val213/DragonOS/user/apps/test-uevent/target/debug/build/clang-sys-2caee0f16d12c106/build_script_build-2caee0f16d12c106: /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/clang-sys-1.8.1/build.rs /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/clang-sys-1.8.1/build/macros.rs /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/clang-sys-1.8.1/build/common.rs /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/clang-sys-1.8.1/build/dynamic.rs /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/clang-sys-1.8.1/build/static.rs
+
+/home/val213/DragonOS/user/apps/test-uevent/target/debug/build/clang-sys-2caee0f16d12c106/build_script_build-2caee0f16d12c106.d: /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/clang-sys-1.8.1/build.rs /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/clang-sys-1.8.1/build/macros.rs /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/clang-sys-1.8.1/build/common.rs /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/clang-sys-1.8.1/build/dynamic.rs /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/clang-sys-1.8.1/build/static.rs
+
+/home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/clang-sys-1.8.1/build.rs:
+/home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/clang-sys-1.8.1/build/macros.rs:
+/home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/clang-sys-1.8.1/build/common.rs:
+/home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/clang-sys-1.8.1/build/dynamic.rs:
+/home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/clang-sys-1.8.1/build/static.rs:

@@ -1,0 +1,9 @@
+/home/val213/DragonOS/user/apps/test-uevent/target/x86_64-unknown-linux-musl/debug/deps/libmanaged-15d29ff1a299100b.rmeta: /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/managed-0.8.0/src/lib.rs /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/managed-0.8.0/src/object.rs /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/managed-0.8.0/src/slice.rs /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/managed-0.8.0/src/slotmap.rs /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/managed-0.8.0/src/map.rs
+
+/home/val213/DragonOS/user/apps/test-uevent/target/x86_64-unknown-linux-musl/debug/deps/managed-15d29ff1a299100b.d: /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/managed-0.8.0/src/lib.rs /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/managed-0.8.0/src/object.rs /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/managed-0.8.0/src/slice.rs /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/managed-0.8.0/src/slotmap.rs /home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/managed-0.8.0/src/map.rs
+
+/home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/managed-0.8.0/src/lib.rs:
+/home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/managed-0.8.0/src/object.rs:
+/home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/managed-0.8.0/src/slice.rs:
+/home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/managed-0.8.0/src/slotmap.rs:
+/home/val213/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-df7c3c540f42cdbd/managed-0.8.0/src/map.rs:
