@@ -17,7 +17,7 @@ use num::Zero;
 use system_error::SystemError;
 use unified_init::macros::unified_init;
 
-use crate::include::bindings::bindings::{ECONNREFUSED, __WORDSIZE};
+use system_error::SystemError::ECONNREFUSED;
 use crate::libs::mutex::Mutex;
 use crate::libs::rwlock::RwLockWriteGuard;
 use crate::libs::spinlock::SpinLock;
@@ -343,7 +343,7 @@ fn netlink_bind(sock: Box<dyn Socket>, addr: &SockAddrNl, addr_len: usize) -> Re
     // }
 
     // BITS_PER_LONG = __WORDSIZE
-    if nlk.ngroups < __WORDSIZE as u64 {
+    if nlk.ngroups < 64 as u64 {
         groups &= (1 << nlk.ngroups) - 1;
     }
 
@@ -1009,6 +1009,7 @@ impl<'a> NetlinkBroadcastData<'a> {
 /// ## 备注：
 /// 传入的 netlink 套接字跟组播消息属于同一种 netlink 协议类型，并且这个套接字开启了组播阅订，除了这些，其他信息(比如阅订了具体哪些组播)都是不确定的
 fn do_one_broadcast(sk: Arc<Mutex<Box<dyn NetlinkSocket>>>, info: &mut Box<NetlinkBroadcastData>)->Result<(), SystemError> {
+    log::info!("do_one_broadcast");
     // 从Arc<dyn NetlinkSocket>中获取NetlinkSock
     let nlk: Arc<NetlinkSock> = Arc::clone(&sk).arc_any().downcast().map_err(|_| SystemError::EINVAL)?;
     // 如果源 sock 和目的 sock 是同一个则直接返回
@@ -1082,6 +1083,7 @@ fn do_one_broadcast(sk: Arc<Mutex<Box<dyn NetlinkSocket>>>, info: &mut Box<Netli
         info.skb_2 = Arc::new(RwLock::new(info.skb.read().clone()));
     }
     drop(sk);
+    log::info!("do_one_broadcast success");
     Ok(())
 }
 /// 发送 netlink 组播消息
@@ -1102,6 +1104,7 @@ pub fn netlink_broadcast<'a>(
     group: u64,
     allocation: u32,
 ) -> Result<(), SystemError> {
+    log::info!("netlink_broadcast");
     // TODO: 需要net namespace支持
     // let net = sock_net(ssk);
     let mut info = Box::new(NetlinkBroadcastData {
@@ -1164,6 +1167,7 @@ fn sk_filter(sk: &Arc<Mutex<Box<dyn NetlinkSocket>>>, skb: &Arc<RwLock<SkBuff>>)
 /// - 到这里，已经确定了传入的 netlink 套接字跟组播消息匹配正确；
 /// - netlink 组播消息不支持阻塞
 fn netlink_broadcast_deliver(sk: Arc<Mutex<Box<dyn NetlinkSocket>>>, skb: &Arc<RwLock<SkBuff>>) -> i32 {
+    log::info!("netlink_broadcast_deliver");
     let nlk: Arc<LockedNetlinkSock> = Arc::clone(&sk).arc_any().downcast().expect("Invalid downcast to LockedNetlinkSock");
     let nlk_guard = nlk.0.read();
     // 如果接收缓冲区的已分配内存小于或等于其总大小，并且套接字没有被标记为拥塞，则继续执行内部的代码块。
@@ -1267,7 +1271,7 @@ fn netlink_unicast_kernel(sk: Arc<Mutex<Box<dyn NetlinkSocket>>>, ssk: Arc<Mutex
     let mut ret: u32;
     let nlk: Arc<LockedNetlinkSock> = Arc::clone(&sk).arc_any().downcast().map_err(|_| SystemError::EINVAL).expect("Invalid downcast to LockedNetlinkSock");
     let nlk_guard = nlk.0.read();
-	ret = ECONNREFUSED;
+	ret = 111;
     // 检查内核netlink套接字是否注册了netlink_rcv回调(就是各个协议在创建内核netlink套接字时通常会传入的input函数)
 	if !nlk_guard.callback.is_none() {
 		ret = skb.read().len;
