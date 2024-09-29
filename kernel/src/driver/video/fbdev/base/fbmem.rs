@@ -14,11 +14,7 @@ use crate::{
     driver::base::{
         class::{class_manager, Class},
         device::{
-            bus::Bus,
-            device_manager,
-            device_number::{DeviceNumber, Major},
-            driver::Driver,
-            sys_dev_char_kset, Device, DeviceType, IdTable,
+            bus::Bus, device_manager, device_number::{DeviceNumber, Major}, driver::Driver, sys_dev_char_kset, CommonAttrGroup, Device, DeviceType, IdTable
         },
         kobject::{KObjType, KObject, KObjectState, LockedKObjectState},
         kset::KSet,
@@ -373,7 +369,7 @@ impl Device for FbDevice {
     }
 
     fn attribute_groups(&self) -> Option<&'static [&'static dyn AttributeGroup]> {
-        Some(&[&FbDeviceAttrGroup])
+        Some(&[&FbDeviceAttrGroup, &CommonAttrGroup])
     }
 }
 

@@ -92,42 +92,25 @@ fn uevent_net_exit()
 pub const BUFFERSIZE: usize = 666;
 
 /*
- kobject_uevent_env，以envp为环境变量，上报一个指定action的uevent。环境变量的作用是为执行用户空间程序指定运行环境。具体动作如下：
 
-    查找kobj本身或者其parent是否从属于某个kset，如果不是，则报错返回（注2：由此可以说明，如果一个kobject没有加入kset，是不允许上报uevent的）
-    查看kobj->uevent_suppress是否设置，如果设置，则忽略所有的uevent上报并返回（注3：由此可知，可以通过Kobject的uevent_suppress标志，管控Kobject的uevent的上报）
-    如果所属的kset有kset->filter函数，则调用该函数，过滤此次上报（注4：这佐证了3.2小节有关filter接口的说明，kset可以通过filter接口过滤不希望上报的event，从而达到整体的管理效果）
-    判断所属的kset是否有合法的名称（称作subsystem，和前期的内核版本有区别），否则不允许上报uevent
-    分配一个用于此次上报的、存储环境变量的buffer（结果保存在env指针中），并获得该Kobject在sysfs中路径信息（用户空间软件需要依据该路径信息在sysfs中访问它）
-    调用add_uevent_var接口（下面会介绍），将Action、路径信息、subsystem等信息，添加到env指针中
-    如果传入的envp不空，则解析传入的环境变量中，同样调用add_uevent_var接口，添加到env指针中
-    如果所属的kset存在kset->uevent接口，调用该接口，添加kset统一的环境变量到env指针
-    根据ACTION的类型，设置kobj->state_add_uevent_sent和kobj->state_remove_uevent_sent变量，以记录正确的状态
-    调用add_uevent_var接口，添加格式为"SEQNUM=%llu”的序列号
-    如果定义了"CONFIG_NET”，则使用netlink发送该uevent
-    以uevent_helper、subsystem以及添加了标准环境变量（HOME=/，PATH=/sbin:/bin:/usr/sbin:/usr/bin）的env指针为参数，调用kmod模块提供的call_usermodehelper函数，上报uevent。
-    其中uevent_helper的内容是由内核配置项CONFIG_UEVENT_HELPER_PATH(位于./drivers/base/Kconfig)决定的(可参考lib/kobject_uevent.c, line 32)，该配置项指定了一个用户空间程序（或者脚本），用于解析上报的uevent，例如"/sbin/hotplug”。
-    call_usermodehelper的作用，就是fork一个进程，以uevent为参数，执行uevent_helper。
 
-kobject_uevent，和kobject_uevent_env功能一样，只是没有指定任何的环境变量。
 
-add_uevent_var，以格式化字符的形式（类似printf、printk等），将环境变量copy到env指针中。
-
-kobject_action_type，将enum kobject_action类型的Action，转换为字符串
 */
 
-//kobject_uevent->kobject_uevent_env
+/// kobject_uevent，和kobject_uevent_env功能一样，只是没有指定任何的环境变量
 pub fn kobject_uevent(kobj: Arc<dyn KObject>, action: KobjectAction) -> Result<(), SystemError> {
     // kobject_uevent和kobject_uevent_env功能一样，只是没有指定任何的环境变量
-    match kobject_uevent_env(kobj, action, None) {
+    match kobject_uevent_env(kobj, action, Vec::new()) {
         Ok(_) => Ok(()),
         Err(e) => Err(e),
     }
 }
+
+///  kobject_uevent_env，以envp为环境变量，上报一个指定action的uevent。环境变量的作用是为执行用户空间程序指定运行环境。
 pub fn kobject_uevent_env(
     kobj: Arc<dyn KObject>,
     action: KobjectAction,
-    envp_ext: Option<Vec<String>>,
+    envp_ext: Vec<String>,
 ) -> Result<i32, SystemError> {
     log::info!("kobject_uevent_env: kobj: {:?}, action: {:?}", kobj, action);
     let mut state = KObjectState::empty();
@@ -250,15 +233,14 @@ pub fn kobject_uevent_env(
     };
 
     /* keys passed in from the caller */
-    if let Some(env_ext) = envp_ext {
-        for var in env_ext {
-            let retval = add_uevent_var(&mut env, "%s", &var).unwrap();
-            if !retval.is_zero() {
-                drop(devpath);
-                drop(env);
-                log::info!("add_uevent_var failed");
-                return Ok(retval);
-            }
+
+    for var in envp_ext {
+        let retval = add_uevent_var(&mut env, "%s", &var).unwrap();
+        if !retval.is_zero() {
+            drop(devpath);
+            drop(env);
+            log::info!("add_uevent_var failed");
+            return Ok(retval);
         }
     }
     if let Some(kset_ref) = kset.as_ref() {
@@ -339,6 +321,7 @@ pub fn kobject_uevent_env(
     return Ok(retval);
 }
 
+/// 以格式化字符的形式，将环境变量copy到env指针中。
 pub fn add_uevent_var(
     env: &mut Box<KobjUeventEnv>,
     format: &str,

@@ -22,7 +22,7 @@ use crate::{
 
 use system_error::SystemError;
 
-use super::{kset::KSet, uevent::kobject_uevent};
+use super::{device::CommonAttrGroup, kset::KSet, uevent::kobject_uevent};
 
 pub trait KObject: Any + Send + Sync + Debug + CastFromSync {
     fn as_any_ref(&self) -> &dyn core::any::Any;
@@ -95,7 +95,9 @@ pub trait KObjType: Debug + Send + Sync {
     fn release(&self, _kobj: Arc<dyn KObject>) {}
     fn sysfs_ops(&self) -> Option<&dyn SysFSOps>;
 
-    fn attribute_groups(&self) -> Option<&'static [&'static dyn AttributeGroup]>;
+    fn attribute_groups(&self) -> Option<&'static [&'static dyn AttributeGroup]>{
+        Some(&[&CommonAttrGroup])
+    }
 }
 
 bitflags! {

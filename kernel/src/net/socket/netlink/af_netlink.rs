@@ -1,28 +1,20 @@
 // 参考https://code.dragonos.org.cn/xref/linux-6.1.9/net/netlink/af_netlink.c
-use core::cmp::{max, min};
-use core::ops::{Deref, DerefMut};
+use core::ops::Deref;
 use core::{any::Any, fmt::Debug, hash::Hash};
-use core::{mem, slice};
-
+use core::mem;
 use alloc::string::String;
-use alloc::sync::{Arc, Weak};
-
+use alloc::sync::Arc;
 use hashbrown::HashMap;
-use intertrait::cast::CastBox;
 use intertrait::CastFromSync;
-use log::warn;
-use netlink::callback;
 use netlink::netlink::{sk_data_ready, NetlinkKernelCfg};
 use num::Zero;
 use system_error::SystemError;
 use unified_init::macros::unified_init;
-
 use crate::filesystem::vfs::{FilePrivateData, FileSystem, IndexNode};
 use system_error::SystemError::ECONNREFUSED;
 use crate::libs::mutex::Mutex;
 use crate::libs::rwlock::RwLockWriteGuard;
 use crate::libs::spinlock::{SpinLock, SpinLockGuard};
-use crate::net::event_poll::{EPollEventType, EPollItem, EventPoll};
 use crate::net::socket::netlink::skbuff::SkBuff;
 use crate::net::socket::*;
 use crate::net::syscall::{MsgHdr, SockAddr, SockAddrNl};
@@ -107,7 +99,7 @@ impl<'a> NetlinkTable {
     fn new() -> NetlinkTable {
         NetlinkTable {
             hash: HashMap::new(),
-            listeners: Some(Listeners { masks: Vec::new() }),
+            listeners: Some(Listeners { masks: Vec::with_capacity(32) }),
             registered: 0,
             flags: 0,
             groups: 0,
@@ -763,15 +755,15 @@ impl NetlinkSock {
 
 #[derive(Clone)]
 pub struct Listeners {
-    // Recursive Wakeup Unlocking?
+    // todo: rcu
+    // 动态位图，每一位代表一个组播组，如果对应位为 1，表示有监听
     masks: Vec<u64>,
 }
 impl Listeners {
+    /// 创建一个新的 `Listeners` 实例，并将 `masks` 的所有位初始化为 0
     pub fn new() -> Listeners {
-        Listeners { masks: Vec::new() }
-    }
-    fn masks(&self) -> Vec<u64> {
-        Vec::new()
+        let masks = vec![0u64; 32];
+        Listeners { masks }
     }
 }
 
@@ -780,6 +772,7 @@ fn initialize_netlink_table() -> RwLock<Vec<NetlinkTable>> {
     for _ in 0..MAX_LINKS {
         tables.push(NetlinkTable::new());
     }
+    log::info!("initialize_netlink_table,len:{}",tables.len());
     RwLock::new(tables)
 }
 
@@ -791,12 +784,31 @@ pub fn netlink_has_listeners(sk: &NetlinkSock, group: u32) -> i32 {
     log::info!("netlink_has_listeners");
     let mut res = 0;
     let protocol = sk.sk_protocol();
+    
+    // 获取读锁
     let nl_table = NL_TABLE.read();
-    if let Some(listeners) = &nl_table[protocol].listeners {
-        if group - 1 < nl_table[protocol].groups {
-            res = listeners.masks[group as usize - 1] as i32;
-        }
+    
+    // 检查 protocol 是否在范围内
+    if protocol >= nl_table.len() {
+        log::error!("Protocol {} is out of bounds, table's len is {}", protocol, nl_table.len());
+        return res;
     }
+    
+    // 获取对应的 NetlinkTable
+    let netlink_table = &nl_table[protocol];
+    
+    // 检查 listeners 是否存在
+    if let Some(listeners) = &netlink_table.listeners {
+        // 检查 group 是否在范围内
+        if group > 0 && (group as usize - 1) < listeners.masks.len() {
+            res = listeners.masks[group as usize - 1] as i32;
+        } else {
+            log::error!("Group {} is out of bounds, len is {}", group, listeners.masks.len());
+        }
+    } else {
+        log::error!("Listeners for protocol {} are None", protocol);
+    }
+    
     res
 }
 struct NetlinkBroadcastData<'a> {
