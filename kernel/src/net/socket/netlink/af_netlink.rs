@@ -1,12 +1,13 @@
 // 参考https://code.dragonos.org.cn/xref/linux-6.1.9/net/netlink/af_netlink.c
 use core::ops::Deref;
+use core::ptr::copy_nonoverlapping;
 use core::{any::Any, fmt::Debug, hash::Hash};
 use core::mem;
 use alloc::string::String;
 use alloc::sync::Arc;
 use hashbrown::HashMap;
 use intertrait::CastFromSync;
-use netlink::netlink::{sk_data_ready, NetlinkKernelCfg};
+use netlink::netlink::{sk_data_ready, NetlinkKernelCfg, NETLINK_ADD_MEMBERSHIP, NETLINK_DROP_MEMBERSHIP, NETLINK_PKTINFO};
 use num::Zero;
 use system_error::SystemError;
 use unified_init::macros::unified_init;
@@ -519,6 +520,10 @@ impl Socket for NetlinkSock {
     fn recv_buffer_size(&self) -> usize {
         log::warn!("recv_buffer_size is implemented to 0");
         0
+    }
+
+    fn set_option(&self, level: OptionsLevel, name: usize, val: &[u8]) -> Result<(), SystemError> {
+        return netlink_setsockopt(self, level, name, val);
     }
 }
 impl IndexNode for NetlinkSock {
@@ -1248,4 +1253,54 @@ fn netlink_getsockbyportid(
         return Err(SystemError::ECONNREFUSED);
     }
     return Ok(sock);
+}
+
+/// 设置 netlink 套接字的选项
+fn netlink_setsockopt(nlk:&NetlinkSock, level: OptionsLevel, optname: usize, optval: &[u8]) -> Result<(), SystemError> {
+    if level!=OptionsLevel::NETLINK {
+        return Err(SystemError::ENOPROTOOPT);
+    }
+    let optlen = optval.len();
+    let mut val: usize = 0;
+    if optlen >= size_of::<usize>() {
+        unsafe {
+            if optval.len() >= size_of::<usize>() {
+                // 将 optval 中的数据拷贝到 val 中
+                copy_nonoverlapping(optval.as_ptr(), &mut val as *mut usize as *mut u8, size_of::<usize>());
+            } else {
+                return Err(SystemError::EFAULT);
+            }
+        }
+    } else {
+        return Err(SystemError::EINVAL);
+    }
+    match optname {
+        // add 和 drop 对应同一段代码
+        NETLINK_ADD_MEMBERSHIP | NETLINK_DROP_MEMBERSHIP => {
+            let group = val as u64;
+            let mut nl_table = NL_TABLE.write();
+            let netlink_table = &mut nl_table[nlk.protocol];
+            let listeners = netlink_table.listeners.as_mut().unwrap();
+            let group = group - 1;
+            let mask = 1 << (group % 64);
+            let idx = group / 64;
+            if optname == NETLINK_ADD_MEMBERSHIP {
+                listeners.masks[idx as usize] |= mask;
+            } else {
+                listeners.masks[idx as usize] &= !mask;
+            }
+        }
+        // NETLINK_PKTINFO => {
+        //     if val != 0 {
+        //     nlk.flags |= NetlinkFlags::RECV_PKTINFO.bits();
+        //     } else {
+        //     nlk.flags &= !NetlinkFlags::RECV_PKTINFO.bits();
+        //     }
+        // }
+        _ => {
+            return Err(SystemError::ENOPROTOOPT);
+        }
+    }
+    Ok(())
+
 }

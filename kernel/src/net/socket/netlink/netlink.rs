@@ -9,6 +9,10 @@ use crate::libs::mutex::Mutex;
 use core::mem;
 
 use super::af_netlink::{netlink_insert, Listeners, NetlinkFlags, NetlinkSock, NetlinkSocket, NL_TABLE};
+// 监听事件类型
+pub const NETLINK_ADD_MEMBERSHIP: usize = 1;
+pub const NETLINK_DROP_MEMBERSHIP: usize = 2;
+pub const NETLINK_PKTINFO: usize = 3; // 接收包信息。如果设置了这个选项，套接字将接收包含发送者信息（如发送者的端口号和地址）的消息
 // Netlink protocol family
 pub const NETLINK_ROUTE: usize = 0;
 pub const NETLINK_UNUSED: usize = 1;
