@@ -1,4 +1,4 @@
-use libc::{sockaddr, sockaddr_storage, recvfrom, bind, sendto, socket, AF_NETLINK, SOCK_DGRAM, SOCK_CLOEXEC, getpid, c_void};
+use libc::{sockaddr, recvfrom, bind, sendto, socket, AF_NETLINK, SOCK_DGRAM, SOCK_CLOEXEC, getpid, c_void};
 use nix::libc;
 use std::os::unix::io::RawFd;
 use std::{ mem, io};
@@ -30,7 +30,8 @@ fn bind_netlink_socket(sock: RawFd) -> io::Result<()> {
     let mut addr: libc::sockaddr_nl = unsafe { mem::zeroed() };
     addr.nl_family = AF_NETLINK as u16;
     addr.nl_pid = pid as u32;
-    addr.nl_groups = 0;
+    // 订阅内核广播的 uevent 事件组播组
+    addr.nl_groups = 1;
 
     let ret = unsafe {
         bind(sock, &addr as *const _ as *const sockaddr, mem::size_of::<libc::sockaddr_nl>() as u32)
@@ -48,7 +49,7 @@ fn send_uevent(sock: RawFd, message: &str) -> io::Result<()> {
     let mut addr: libc::sockaddr_nl = unsafe { mem::zeroed() };
     addr.nl_family = AF_NETLINK as u16;
     addr.nl_pid = 0;
-    addr.nl_groups = 0;
+    addr.nl_groups = 1;
 
     let nlmsghdr = Nlmsghdr {
         nlmsg_len: (mem::size_of::<Nlmsghdr>() + message.len()) as u32,

@@ -164,7 +164,7 @@ pub fn kobject_uevent_env(
         }
     }
 
-     // 判断所属的kset是否有合法的名称（称作subsystem，和前期的内核版本有区别），否则不允许上报uevent
+    // 判断所属的kset是否有合法的名称（称作subsystem，和前期的内核版本有区别），否则不允许上报uevent
     // originating subsystem
     let subsystem: String = if let Some(kset_ref) = kset.as_ref() {
         if let Some(uevent_ops) = &kset_ref.uevent_ops {
