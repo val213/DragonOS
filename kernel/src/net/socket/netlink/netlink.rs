@@ -250,8 +250,9 @@ impl VecExt for Vec<u8> {
         self[offset..(bytes.len() + offset)].copy_from_slice(bytes);
     }
 }
-
+/// 创建一个内核netlink套接字
 // todo： net namespace
+// https://code.dragonos.org.cn/xref/linux-6.1.9/net/netlink/af_netlink.c?fi=__netlink_kernel_create#2037
 pub fn netlink_kernel_create(unit: usize, cfg:Option<NetlinkKernelCfg>) -> Result<NetlinkSock, SystemError> {
     // THIS_MODULE
 	let mut nlk: NetlinkSock = NetlinkSock::new();
@@ -304,6 +305,7 @@ fn __netlink_create(nlk: &mut NetlinkSock, unit: usize, kern:usize)->Result<i32,
     // 其他的初始化配置参数
     nlk.flags = kern as u32;
     nlk.protocol = unit;
+
     return Ok(0);
 }
 

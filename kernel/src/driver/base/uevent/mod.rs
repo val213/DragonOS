@@ -20,7 +20,9 @@ use alloc::vec::Vec;
 use intertrait::cast::CastArc;
 use system_error::SystemError;
 
-use super::device::Device;
+use super::block::block_device::{BlockDevice, BlockDeviceOps};
+use super::char::CharDevice;
+use super::device::{Device, DeviceType};
 
 pub mod kobject_uevent;
 
@@ -127,17 +129,48 @@ impl Attribute for UeventAttr{
 
     /// 用户空间读取 uevent 文件，返回 uevent 信息
     fn show(&self, _kobj: Arc<dyn KObject>, _buf: &mut [u8]) -> Result<usize, SystemError> {
-        let device = _kobj
+        let device: Arc<dyn KObject> = _kobj
             .parent()
             .and_then(|x| x.upgrade())
             .ok_or(SystemError::ENODEV)?;
         let device = kobj2device(device).ok_or(SystemError::EINVAL)?;
-        let driver_name = device.driver().ok_or(SystemError::ENODEV)?.name();
-        let device_name = device.name();
-
+        let device_type = device.dev_type();
         let mut uevent_content = String::new();
-        write!(&mut uevent_content, "DEVNAME={}\n", device_name).unwrap();
-        write!(&mut uevent_content, "DRIVER={}\n", driver_name).unwrap();
+        match device_type {
+            DeviceType::Block => {
+                let block_device = device.cast::<dyn BlockDevice>().ok()
+                .ok_or(SystemError::EINVAL)?;
+                let major = block_device.id_table().device_number().major().data();
+                let minor = block_device.id_table().device_number().minor();
+                let device_name = block_device.id_table().name();
+                write!(&mut uevent_content, "MAJOR={:?}\n", major).unwrap();
+                write!(&mut uevent_content, "MINOR={:?}\n", minor).unwrap();
+                write!(&mut uevent_content, "DEVNAME={}\n", device_name).unwrap();
+                write!(&mut uevent_content, "DEVTYPE=disk\n").unwrap();
+            }
+            DeviceType::Char => {
+                let char_device = device.cast::<dyn CharDevice>().ok()
+                .ok_or(SystemError::EINVAL)?;
+                let major = char_device.id_table().device_number().major().data();
+                let minor = char_device.id_table().device_number().minor();
+                let device_name = char_device.id_table().name();
+                write!(&mut uevent_content, "MAJOR={}\n", major).unwrap();
+                write!(&mut uevent_content, "MINOR={}\n", minor).unwrap();
+                write!(&mut uevent_content, "DEVNAME={}\n", device_name).unwrap();
+                write!(&mut uevent_content, "DEVTYPE=char\n").unwrap();
+            }
+            // DeviceType::Net => {
+            //     let ifindex = device.ifindex().expect("Find ifindex error.\n");
+            //     write!(&mut uevent_content, "INTERFACE={}\n", device_name).unwrap();
+            //     write!(&mut uevent_content, "IFINDEX={}\n", ifindex).unwrap();
+            // }
+            _ => {
+                // 处理其他设备类型
+                let device_name = device.name();
+                write!(&mut uevent_content, "DEVNAME={}\n", device_name).unwrap();
+                write!(&mut uevent_content, "DEVTYPE={:?}\n", device_type).unwrap();
+            }
+        }
         sysfs_emit_str(_buf, &uevent_content)
     }
     /// 捕获来自用户空间对 uevent 文件的写操作，触发uevent事件

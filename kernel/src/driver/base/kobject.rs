@@ -1,7 +1,6 @@
 use core::{any::Any, fmt::Debug, hash::Hash, ops::Deref};
 
 use alloc::{
-    boxed::Box,
     string::String,
     sync::{Arc, Weak},
 };
@@ -22,7 +21,7 @@ use crate::{
 
 use system_error::SystemError;
 
-use super::{device::CommonAttrGroup, kset::KSet, uevent::kobject_uevent};
+use super::{device::CommonAttrGroup, kset::KSet};
 
 pub trait KObject: Any + Send + Sync + Debug + CastFromSync {
     fn as_any_ref(&self) -> &dyn core::any::Any;
@@ -266,13 +265,12 @@ impl KObjectManager {
 
     fn get_kobj_path_length(kobj: &Arc<dyn KObject>) -> usize {
         log::info!("get_kobj_path_length() kobj:{:?}", kobj.name());
-        let mut length = 1;
         let mut parent = kobj.parent().unwrap().upgrade().unwrap();
         /* walk up the ancestors until we hit the one pointing to the
          * root.
          * Add 1 to strlen for leading '/' of each level.
          */
-        let mut length = 0; // 确保 length 被正确初始化
+        let mut length = 1; // 确保 length 被正确初始化
         let mut iteration_count = 0; // 用于记录迭代次数
         const MAX_ITERATIONS: usize = 10; // 最大迭代次数
 

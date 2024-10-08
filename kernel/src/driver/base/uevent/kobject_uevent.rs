@@ -88,8 +88,6 @@ fn uevent_net_exit()
 // /* This lock protects uevent_seqnum and uevent_sock_list */
 // static DEFINE_MUTEX(uevent_sock_mutex);
 
-// to be adjust
-pub const BUFFERSIZE: usize = 666;
 
 /*
 
@@ -390,7 +388,6 @@ pub fn kobject_uevent_net_broadcast(
     action_string: &str,
     devpath: &str,
 ) -> i32 {
-    let mut ret = 0;
     // let net:Net = None;
     // let mut ops = kobj_ns_ops(kobj);
 
@@ -415,7 +412,7 @@ pub fn kobject_uevent_net_broadcast(
     // if !net.is_none() {
     //     ret = uevent_net_broadcast_tagged(net.unwrap(), env, action_string, devpath);
     // } else {
-    ret = uevent_net_broadcast_untagged(env, action_string, devpath);
+    let ret = uevent_net_broadcast_untagged(env, action_string, devpath);
     // }
     log::info!("kobject_uevent_net_broadcast finish. ret: {}", ret);
     ret

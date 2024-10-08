@@ -15,10 +15,10 @@ use crate::filesystem::vfs::{FilePrivateData, FileSystem, IndexNode};
 use system_error::SystemError::ECONNREFUSED;
 use crate::libs::mutex::{Mutex, MutexGuard};
 use crate::libs::rwlock::RwLockWriteGuard;
-use crate::libs::spinlock::{SpinLock, SpinLockGuard};
+use crate::libs::spinlock::{SpinLockGuard};
 use crate::net::socket::netlink::skbuff::SkBuff;
 use crate::net::socket::*;
-use crate::net::syscall::{MsgHdr, SockAddr, SockAddrNl};
+use crate::net::syscall::SockAddrNl;
 use crate::time::timer::schedule_timeout;
 use crate::{libs::rwlock::RwLock, syscall::Syscall};
 use alloc::{boxed::Box, vec::Vec};
@@ -31,7 +31,7 @@ use super::endpoint::NetlinkEndpoint;
 use super::netlink::{
     NLmsgFlags, NLmsgType, NLmsghdr, VecExt, NETLINK_USERSOCK, NL_CFG_F_NONROOT_SEND,
 };
-use super::netlink_proto::{proto_register, Proto, NETLINK_PROTO};
+use super::netlink_proto::{proto_register, NETLINK_PROTO};
 use super::skbuff::{netlink_overrun, skb_orphan, skb_shared};
 use super::sock::SockFlags;
 use crate::init::initcall::INITCALL_CORE;
@@ -110,8 +110,8 @@ impl<'a> NetlinkTable {
             compare: None,
         }
     }
-    fn listeners(&self) -> RCuListeners {
-        RCuListeners::new()
+    fn listeners(&self) -> Listeners {
+        Listeners::new()
     }
     fn flags(&self) -> u32 {
         0
@@ -138,39 +138,6 @@ impl<'a> NetlinkTable {
     }
 }
 
-pub struct LockedNetlinkTable(RwLock<NetlinkTable>);
-
-impl LockedNetlinkTable {
-    pub fn new(netlinktable: NetlinkTable) -> LockedNetlinkTable {
-        LockedNetlinkTable(RwLock::new(netlinktable))
-    }
-}
-// You would need to implement the actual methods for the traits and the bind/unbind functions.
-trait NetlinkMessageHandler {
-    fn handle_message(&mut self, msg: &[u8]) {
-        // Implementation of message handling
-    }
-}
-
-struct RCuListeners {
-    list: Vec<Box<dyn NetlinkMessageHandler>>,
-}
-
-impl RCuListeners {
-    fn new() -> Self {
-        Self { list: Vec::new() }
-    }
-
-    fn register(&mut self, listener: Box<dyn NetlinkMessageHandler>) {
-        self.list.push(listener);
-    }
-
-    fn handle_message(&mut self, msg: &[u8]) {
-        for listener in &mut self.list {
-            listener.handle_message(msg);
-        }
-    }
-}
 
 // https://code.dragonos.org.cn/xref/linux-6.1.9/net/netlink/af_netlink.c#2916
 /// netlink 协议的最大数量
@@ -316,7 +283,7 @@ fn netlink_bind(
     ));
     let nladdr = addr;
     let mut groups: u32;
-    let mut bound: bool;
+    let bound: bool;
     log::info!("netlink_bind: nl_family: {:?}", nladdr.nl_family);
     if nladdr.nl_family != AddressFamily::Netlink {
         log::warn!("netlink_bind: nl_family != AF_NETLINK");
@@ -384,6 +351,7 @@ fn netlink_bind(
     }
     // todo
     // netlink_update_subscriptions(sk, nlk.subscriptions + hweight32(groups) - hweight32(nlk.groups.unwrap()[0]));
+    log::info!("netlink_bind: nlk.groups: {:?}", nlk.groups);
     nlk.groups[0] = (nlk.groups[0] & !0xffffffff) | groups;
     log::info!("netlink_bind: nlk.groups: {:?}", nlk.groups);
     netlink_update_listeners(nlk);
@@ -691,12 +659,6 @@ impl NetlinkSock {
             sk_rcvtimeo: 0,
             callback: None,
         }
-    }
-    fn register(&self, listener: Box<dyn NetlinkMessageHandler>) {
-        // Implementation of the function
-    }
-    fn unregister(&self, listener: Box<dyn NetlinkMessageHandler>) {
-        // Implementation of the function
     }
     // https://code.dragonos.org.cn/xref/linux-6.1.9/net/netlink/af_netlink.c#1078
     ///
@@ -1331,13 +1293,13 @@ fn netlink_setsockopt(nlk:&NetlinkSock, level: OptionsLevel, optname: usize, opt
                 listeners.masks[idx as usize] &= !mask;
             }
         }
-        // NETLINK_PKTINFO => {
+        NETLINK_PKTINFO => {
         //     if val != 0 {
         //     nlk.flags |= NetlinkFlags::RECV_PKTINFO.bits();
         //     } else {
         //     nlk.flags &= !NetlinkFlags::RECV_PKTINFO.bits();
         //     }
-        // }
+        }
         _ => {
             return Err(SystemError::ENOPROTOOPT);
         }
@@ -1365,7 +1327,7 @@ fn netlink_update_listeners(nlk: MutexGuard<NetlinkSock>) {
     }
 }
 
-
+/// 重新分配 netlink 套接字的组
 fn netlink_realloc_groups(nlk: &mut MutexGuard<NetlinkSock>) -> Result<(), SystemError> {
     let nl_table = NL_TABLE.write();
     let groups = nl_table[nlk.protocol].groups;
@@ -1381,6 +1343,7 @@ fn netlink_realloc_groups(nlk: &mut MutexGuard<NetlinkSock>) -> Result<(), Syste
     }
     log::info!("nlk.ngroups:{},groups:{}",nlk.ngroups,groups);
     let mut new_groups = vec![0u32; groups as usize];
+    log::info!("nlk.groups:{:?}",nlk.groups);
     // 当 nlk.ngroups 大于 0 时复制数据
     if nlk.ngroups > 0 {
         new_groups[..nlk.ngroups as usize].copy_from_slice(&nlk.groups);

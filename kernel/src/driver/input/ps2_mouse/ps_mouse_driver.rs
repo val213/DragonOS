@@ -52,7 +52,7 @@ impl IrqHandler for Ps2MouseIrqHandler {
         _dev_id: Option<Arc<dyn IrqHandlerData>>,
     ) -> Result<IrqReturn, SystemError> {
         if let Some(psmouse_device) = ps2_mouse_device() {
-            return Ok(ps2_mouse_driver()
+            return Ok(ps2_mouse_driver().unwrap()
                 .interrupt(&(psmouse_device as Arc<dyn SerioDevice>), 0, 0)
                 .map(|_| IrqReturn::Handled)
                 .unwrap_or_else(|_| IrqReturn::NotHandled));
@@ -66,8 +66,14 @@ impl IrqHandler for Ps2MouseIrqHandler {
 static mut PS2_MOUSE_DRIVER: Option<Arc<Ps2MouseDriver>> = None;
 
 #[allow(dead_code)]
-pub fn ps2_mouse_driver() -> Arc<Ps2MouseDriver> {
-    unsafe { PS2_MOUSE_DRIVER.clone().unwrap() }
+pub fn ps2_mouse_driver() -> Result<Arc<Ps2MouseDriver>, &'static str> {
+    unsafe {
+        if let Some(driver) = PS2_MOUSE_DRIVER.clone() {
+            Ok(driver)
+        } else {
+            Err("PS2_MOUSE_DRIVER is not initialized")
+        }
+    }
 }
 
 #[derive(Debug)]

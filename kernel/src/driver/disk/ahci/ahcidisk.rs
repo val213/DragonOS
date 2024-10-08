@@ -32,7 +32,8 @@ use core::sync::atomic::{compiler_fence, Ordering};
 use core::{mem::size_of, ptr::write_bytes};
 
 /// @brief: 只支持MBR分区格式的磁盘结构体
-pub struct AhciDisk {
+pub struct 
+AhciDisk {
     pub name: String,
     pub flags: u16,                      // 磁盘的状态flags
     pub partitions: Vec<Arc<Partition>>, // 磁盘分区数组
