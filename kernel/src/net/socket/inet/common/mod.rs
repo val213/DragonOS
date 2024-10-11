@@ -1,5 +1,5 @@
 use crate::net::{Iface, NET_DEVICES};
-use alloc::{vec::Vec, sync::Arc};
+use alloc::sync::Arc;
 use system_error::SystemError::{self, *};
 
 pub mod port;
@@ -41,18 +41,24 @@ impl BoundInner {
         if address.is_unspecified() {
             // let inner = Vec::new();
             // for (_, iface) in *NET_DEVICES.read_irqsave() {
-            //     let handle = iface.sockets().lock_no_preempt().add()
-            //     inner.push((iface))
+            //     let handle = iface.sockets().lock_no_preempt().add(socket);
+            //     iface
             // }
-            // 强行绑定 VirtIO
-            let iface = NET_DEVICES.read_irqsave().get(&0).expect("??bind without virtIO, serious?").clone();
+            // 强绑VirtualIO
+            log::debug!("Not bind to any iface, bind to virtIO");
+            let iface = NET_DEVICES
+                .read_irqsave()
+                .get(&0)
+                .expect("??bind without virtIO, serious?")
+                .clone();
             let handle = iface.sockets().lock_no_preempt().add(socket);
-            return Ok( Self { handle, iface });
+            return Ok(Self { handle, iface });
         } else {
             let iface = get_iface_to_bind(address).ok_or(ENODEV)?;
             let handle = iface.sockets().lock_no_preempt().add(socket);
+            // log::debug!("Bind to iface: {}", iface.iface_name());
             // return Ok(Self { inner: vec![(handle, iface)] });
-            return Ok( Self { handle, iface });
+            return Ok(Self { handle, iface });
         }
     }
 
@@ -91,20 +97,21 @@ impl BoundInner {
     }
 
     pub fn release(&self) {
-        self.iface.sockets().lock_no_preempt().remove(self.handle);
+        self.iface.sockets().lock().remove(self.handle);
     }
 }
 
 #[inline]
 pub fn get_iface_to_bind(ip_addr: &smoltcp::wire::IpAddress) -> Option<Arc<dyn Iface>> {
+    // log::debug!("get_iface_to_bind: {:?}", ip_addr);
     // if ip_addr.is_unspecified()
     crate::net::NET_DEVICES
         .read_irqsave()
         .iter()
         .find(|(_, iface)| {
             let guard = iface.smol_iface().lock();
-            // log::debug!("iface ip: {:?}", guard.ip_addrs());
-            return guard.has_ip_addr(*ip_addr);
+            // log::debug!("iface name: {}, ip: {:?}", iface.iface_name(), guard.ip_addrs());
+            return guard.has_ip_addr(ip_addr.clone());
         })
         .map(|(_, iface)| iface.clone())
 }

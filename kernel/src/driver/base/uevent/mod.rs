@@ -1,5 +1,5 @@
-use core::fmt::Write;
 use crate::driver::base::uevent::kobject_uevent::kobject_uevent_env;
+use core::fmt::Write;
 /*
 Struct
     kset_uevent_ops
@@ -13,6 +13,7 @@ Function
     to_kset
 */
 use crate::driver::base::kobject::KObject;
+use crate::driver::net::Iface;
 use crate::filesystem::sysfs::{Attribute, SysFSOpsSupport, SYSFS_ATTR_MODE_RW};
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
@@ -42,13 +43,13 @@ pub enum KobjectAction {
 /// 解析一个字符串，以确定它代表的是哪个 kobject_action，并提取出随后的参数（如果有的话）
 fn kobject_action_type(buf: &[u8]) -> Result<(KobjectAction, Vec<String>), SystemError> {
     let mut action = KobjectAction::KOBJCHANGE;
-    let mut action_args:Vec<String> = Vec::new();
+    let mut action_args: Vec<String> = Vec::new();
     let mut count = buf.len();
     if count != 0 && (buf[count - 1] == b'\n' || buf[count - 1] == b'\0') {
         count -= 1;
     }
     if count == 0 {
-        return Err(SystemError::EINVAL)
+        return Err(SystemError::EINVAL);
     }
 
     let arg_start = buf.iter().position(|&c| c == b' ').unwrap_or(count);
@@ -65,7 +66,7 @@ fn kobject_action_type(buf: &[u8]) -> Result<(KobjectAction, Vec<String>), Syste
         b"offline" => action = KobjectAction::KOBJOFFLINE,
         b"bind" => action = KobjectAction::KOBJBIND,
         b"unbind" => action = KobjectAction::KOBJUNBIND,
-        _ => return Err(SystemError::EINVAL)
+        _ => return Err(SystemError::EINVAL),
     }
 
     // 如果有参数，提取参数
@@ -79,11 +80,9 @@ fn kobject_action_type(buf: &[u8]) -> Result<(KobjectAction, Vec<String>), Syste
     Ok((action, action_args))
 }
 
-
 pub const UEVENT_NUM_ENVP: usize = 64;
 pub const UEVENT_BUFFER_SIZE: usize = 2048;
 pub const UEVENT_HELPER_PATH_LEN: usize = 256;
-
 
 /// 表示处理内核对象 uevents 的环境
 /// - envp，指针数组，用于保存每个环境变量的地址，最多可支持的环境变量数量为UEVENT_NUM_ENVP。
@@ -114,7 +113,7 @@ pub struct KobjUeventEnv {
 #[derive(Debug, Clone, Copy)]
 pub struct UeventAttr;
 
-impl Attribute for UeventAttr{
+impl Attribute for UeventAttr {
     fn name(&self) -> &str {
         "uevent"
     }
@@ -138,45 +137,50 @@ impl Attribute for UeventAttr{
         let mut uevent_content = String::new();
         match device_type {
             DeviceType::Block => {
-                let block_device = device.cast::<dyn BlockDevice>().ok()
-                .ok_or(SystemError::EINVAL)?;
+                let block_device = device
+                    .cast::<dyn BlockDevice>()
+                    .ok()
+                    .ok_or(SystemError::EINVAL)?;
                 let major = block_device.id_table().device_number().major().data();
                 let minor = block_device.id_table().device_number().minor();
                 let device_name = block_device.id_table().name();
-                write!(&mut uevent_content, "MAJOR={:?}\n", major).unwrap();
-                write!(&mut uevent_content, "MINOR={:?}\n", minor).unwrap();
-                write!(&mut uevent_content, "DEVNAME={}\n", device_name).unwrap();
-                write!(&mut uevent_content, "DEVTYPE=disk\n").unwrap();
+                writeln!(&mut uevent_content, "MAJOR={:?}", major).unwrap();
+                writeln!(&mut uevent_content, "MINOR={:?}", minor).unwrap();
+                writeln!(&mut uevent_content, "DEVNAME={}", device_name).unwrap();
+                writeln!(&mut uevent_content, "DEVTYPE=disk").unwrap();
             }
             DeviceType::Char => {
-                let char_device = device.cast::<dyn CharDevice>().ok()
-                .ok_or(SystemError::EINVAL)?;
+                let char_device = device
+                    .cast::<dyn CharDevice>()
+                    .ok()
+                    .ok_or(SystemError::EINVAL)?;
                 let major = char_device.id_table().device_number().major().data();
                 let minor = char_device.id_table().device_number().minor();
                 let device_name = char_device.id_table().name();
-                write!(&mut uevent_content, "MAJOR={}\n", major).unwrap();
-                write!(&mut uevent_content, "MINOR={}\n", minor).unwrap();
-                write!(&mut uevent_content, "DEVNAME={}\n", device_name).unwrap();
-                write!(&mut uevent_content, "DEVTYPE=char\n").unwrap();
+                writeln!(&mut uevent_content, "MAJOR={}", major).unwrap();
+                writeln!(&mut uevent_content, "MINOR={}", minor).unwrap();
+                writeln!(&mut uevent_content, "DEVNAME={}", device_name).unwrap();
+                writeln!(&mut uevent_content, "DEVTYPE=char").unwrap();
             }
-            // DeviceType::Net => {
-            //     let ifindex = device.ifindex().expect("Find ifindex error.\n");
-            //     write!(&mut uevent_content, "INTERFACE={}\n", device_name).unwrap();
-            //     write!(&mut uevent_content, "IFINDEX={}\n", ifindex).unwrap();
-            // }
+            DeviceType::Net => {
+                let net_device = device.cast::<dyn Iface>().ok().ok_or(SystemError::EINVAL)?;
+                // let ifindex = net_device.ifindex().expect("Find ifindex error.\n");
+                let device_name = net_device.iface_name();
+                writeln!(&mut uevent_content, "INTERFACE={}", device_name).unwrap();
+                // writeln!(&mut uevent_content, "IFINDEX={}", ifindex).unwrap();
+            }
             _ => {
                 // 处理其他设备类型
                 let device_name = device.name();
-                write!(&mut uevent_content, "DEVNAME={}\n", device_name).unwrap();
-                write!(&mut uevent_content, "DEVTYPE={:?}\n", device_type).unwrap();
+                writeln!(&mut uevent_content, "DEVNAME={}", device_name).unwrap();
+                writeln!(&mut uevent_content, "DEVTYPE={:?}", device_type).unwrap();
             }
         }
         sysfs_emit_str(_buf, &uevent_content)
     }
     /// 捕获来自用户空间对 uevent 文件的写操作，触发uevent事件
     fn store(&self, _kobj: Arc<dyn KObject>, _buf: &[u8]) -> Result<usize, SystemError> {
-
-        return kobject_synth_uevent(_buf,_kobj);
+        return kobject_synth_uevent(_buf, _kobj);
     }
 }
 
@@ -208,7 +212,7 @@ fn kobject_synth_uevent(buf: &[u8], kobj: Arc<dyn KObject>) -> Result<usize, Sys
 
     if let Err(e) = result {
         let device = kobj2device(kobj).ok_or(SystemError::EINVAL)?;
-        let devname = device.name() ;
+        let devname = device.name();
         log::error!("synth uevent: {}: {:?}", devname, e);
         return Err(SystemError::EINVAL);
     }

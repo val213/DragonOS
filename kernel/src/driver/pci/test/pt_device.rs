@@ -10,7 +10,10 @@ use crate::{
     driver::{
         base::{
             class::Class,
-            device::{bus::Bus, driver::Driver, CommonAttrGroup, Device, DeviceCommonData, DeviceType, IdTable},
+            device::{
+                bus::Bus, driver::Driver, CommonAttrGroup, Device, DeviceCommonData, DeviceType,
+                IdTable,
+            },
             kobject::{KObjType, KObject, KObjectCommonData, KObjectState, LockedKObjectState},
             kset::KSet,
         },
@@ -129,6 +132,14 @@ impl Device for TestDevice {
 
     fn state_synced(&self) -> bool {
         true
+    }
+
+    fn dev_parent(&self) -> Option<Weak<dyn Device>> {
+        self.device_data.read().parent.clone()
+    }
+
+    fn set_dev_parent(&self, dev_parent: Option<Weak<dyn Device>>) {
+        self.device_data.write().parent = dev_parent
     }
 }
 

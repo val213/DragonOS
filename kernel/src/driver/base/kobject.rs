@@ -94,7 +94,7 @@ pub trait KObjType: Debug + Send + Sync {
     fn release(&self, _kobj: Arc<dyn KObject>) {}
     fn sysfs_ops(&self) -> Option<&dyn SysFSOps>;
 
-    fn attribute_groups(&self) -> Option<&'static [&'static dyn AttributeGroup]>{
+    fn attribute_groups(&self) -> Option<&'static [&'static dyn AttributeGroup]> {
         Some(&[&CommonAttrGroup])
     }
 }
@@ -179,18 +179,17 @@ impl SysFSOps for KObjectSysFSOps {
 pub struct KObjectManager;
 
 impl KObjectManager {
-    #[allow(dead_code)]
     pub fn init_and_add_kobj(
         kobj: Arc<dyn KObject>,
         join_kset: Option<Arc<KSet>>,
+        kobj_type: Option<&'static dyn KObjType>,
     ) -> Result<(), SystemError> {
-        Self::kobj_init(&kobj);
+        Self::kobj_init(&kobj, kobj_type);
         Self::add_kobj(kobj, join_kset)
     }
 
-    #[allow(dead_code)]
-    pub fn kobj_init(kobj: &Arc<dyn KObject>) {
-        kobj.set_kobj_type(Some(&DynamicKObjKType));
+    pub fn kobj_init(kobj: &Arc<dyn KObject>, kobj_type: Option<&'static dyn KObjType>) {
+        kobj.set_kobj_type(kobj_type);
     }
 
     pub fn add_kobj(
@@ -275,7 +274,11 @@ impl KObjectManager {
         const MAX_ITERATIONS: usize = 10; // 最大迭代次数
 
         loop {
-            log::info!("Iteration {}: parent.name():{:?}", iteration_count, parent.name());
+            log::info!(
+                "Iteration {}: parent.name():{:?}",
+                iteration_count,
+                parent.name()
+            );
             length += parent.name().len() + 1;
             if let Some(weak_parent) = parent.parent() {
                 if let Some(upgraded_parent) = weak_parent.upgrade() {
@@ -330,11 +333,9 @@ impl KObjectManager {
             length -= cur;
             let parent_name = parent.name();
             let name = parent_name.as_bytes();
-            for i in 0..cur {
-                path[length + i] = name[i];
-            }
+            path[length..(cur + length)].copy_from_slice(&name[..cur]);
             length -= 1;
-            path[length] = '/' as u8;
+            path[length] = b'/';
             if let Some(weak_parent) = parent.parent() {
                 if let Some(upgraded_parent) = weak_parent.upgrade() {
                     parent = upgraded_parent;
@@ -351,7 +352,7 @@ impl KObjectManager {
     pub fn kobject_get_path(kobj: &Arc<dyn KObject>) -> String {
         log::debug!("kobject_get_path() kobj:{:?}", kobj.name());
         let length = Self::get_kobj_path_length(kobj);
-        let path:&mut [u8] = &mut vec![0; length];
+        let path: &mut [u8] = &mut vec![0; length];
         Self::fill_kobj_path(kobj, path, length);
         let path_string = String::from_utf8(path.to_vec()).unwrap();
         return path_string;

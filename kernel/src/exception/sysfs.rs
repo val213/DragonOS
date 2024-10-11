@@ -5,7 +5,9 @@ use unified_init::macros::unified_init;
 
 use crate::{
     driver::base::{
-        device::CommonAttrGroup, kobject::{KObjType, KObject, KObjectManager, KObjectSysFSOps}, kset::KSet
+        device::CommonAttrGroup,
+        kobject::{KObjType, KObject, KObjectManager, KObjectSysFSOps},
+        kset::KSet,
     },
     filesystem::{
         sysfs::{

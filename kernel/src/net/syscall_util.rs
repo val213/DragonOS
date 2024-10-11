@@ -31,12 +31,14 @@ impl SysArgSocketType {
     }
 }
 
-use core::ffi::CStr;
 use alloc::sync::Arc;
+use core::ffi::CStr;
 use unix::INODE_MAP;
 
 use crate::{
-    filesystem::vfs::{file::FileMode, FileType,IndexNode, MAX_PATHLEN, ROOT_INODE, VFS_MAX_FOLLOW_SYMLINK_TIMES,},
+    filesystem::vfs::{
+        file::FileMode, FileType, IndexNode, MAX_PATHLEN, ROOT_INODE, VFS_MAX_FOLLOW_SYMLINK_TIMES,
+    },
     libs::casting::DowncastArc,
     mm::{verify_area, VirtAddr},
     net::socket::{self, *},
@@ -108,11 +110,12 @@ impl SockAddr {
         use crate::net::socket::AddressFamily;
 
         let addr = unsafe { addr.as_ref() }.ok_or(SystemError::EFAULT)?;
-        log::debug!("addr is not null ");
+
         unsafe {
             match AddressFamily::try_from(addr.family)? {
                 AddressFamily::INet => {
                     if len < addr.len()? {
+                        log::error!("len < addr.len()");
                         return Err(SystemError::EINVAL);
                     }
 
@@ -130,9 +133,15 @@ impl SockAddr {
                     let addr_un: SockAddrUn = addr.addr_un;
 
                     let path = CStr::from_bytes_until_nul(&addr_un.sun_path)
-                        .map_err(|_| SystemError::EINVAL)?
+                        .map_err(|_| {
+                            log::error!("CStr::from_bytes_until_nul fail");
+                            SystemError::EINVAL
+                        })?
                         .to_str()
-                        .map_err(|_| SystemError::EINVAL)?;
+                        .map_err(|_| {
+                            log::error!("CStr::to_str fail");
+                            SystemError::EINVAL
+                        })?;
 
                     // let fd = match Syscall::open(path.as_ptr(), FileMode::O_RDWR.bits(), 0o755, true){
                     //     Ok(fd)=>fd,
@@ -151,25 +160,22 @@ impl SockAddr {
                     // }
                     // let socket = file.inode().downcast_arc::<socket::Inode>().ok_or(EINVAL)?;
 
-                    let follow_symlink=true;
-                    let (inode_begin, path) = crate::filesystem::vfs::utils::user_path_at(&ProcessManager::current_pcb(), crate::filesystem::vfs::fcntl::AtFlags::AT_FDCWD.bits(), path.trim())?;
-                    let inode0: Result<Arc<dyn IndexNode>, SystemError> = inode_begin.lookup_follow_symlink(
-                        &path,
-                        if follow_symlink {
-                            VFS_MAX_FOLLOW_SYMLINK_TIMES
-                        } else {
-                            0
-                        },
-                    );
+                    let follow_symlink = true;
+                    let (inode_begin, path) = crate::filesystem::vfs::utils::user_path_at(
+                        &ProcessManager::current_pcb(),
+                        crate::filesystem::vfs::fcntl::AtFlags::AT_FDCWD.bits(),
+                        path.trim(),
+                    )?;
+                    let inode0: Result<Arc<dyn IndexNode>, SystemError> =
+                        inode_begin.lookup_follow_symlink(&path, VFS_MAX_FOLLOW_SYMLINK_TIMES);
 
-                    let inode = match inode0{
-                        Ok(inode)=>{
-                            inode
-                        }
-                        Err(_)=>{
-                            let (filename, parent_path) = crate::filesystem::vfs::utils::rsplit_path(&path);
+                    let inode = match inode0 {
+                        Ok(inode) => inode,
+                        Err(_) => {
+                            let (filename, parent_path) =
+                                crate::filesystem::vfs::utils::rsplit_path(&path);
                             // 查找父目录
-                            log::debug!("filename {:?} parent_path {:?}",filename,parent_path);
+                            log::debug!("filename {:?} parent_path {:?}", filename, parent_path);
 
                             let parent_inode: Arc<dyn IndexNode> =
                                 ROOT_INODE().lookup(parent_path.unwrap_or("/"))?;
@@ -177,11 +183,13 @@ impl SockAddr {
                             let inode: Arc<dyn IndexNode> = match parent_inode.create(
                                 filename,
                                 FileType::File,
-                                crate::filesystem::vfs::syscall::ModeType::from_bits_truncate(0o755),
-                            ){
-                                Ok(inode)=>inode,
-                                Err(e)=>{
-                                    log::debug!("inode create fail {:?}",e);
+                                crate::filesystem::vfs::syscall::ModeType::from_bits_truncate(
+                                    0o755,
+                                ),
+                            ) {
+                                Ok(inode) => inode,
+                                Err(e) => {
+                                    log::debug!("inode create fail {:?}", e);
                                     return Err(e);
                                 }
                             };
@@ -189,10 +197,11 @@ impl SockAddr {
                         }
                     };
 
-                    return Ok(Endpoint::InodeId(inode.metadata()?.inode_id));
+                    return Ok(Endpoint::Unixpath((inode.metadata()?.inode_id, path)));
                 }
                 AddressFamily::Packet => {
                     // TODO: support packet socket
+                    log::warn!("not support address family {:?}", addr.family);
                     return Err(SystemError::EINVAL);
                 }
                 AddressFamily::Netlink => {
@@ -201,6 +210,7 @@ impl SockAddr {
                     return Ok(Endpoint::Netlink(NetlinkEndpoint::new(addr)));
                 }
                 _ => {
+                    log::warn!("not support address family {:?}", addr.family);
                     return Err(SystemError::EINVAL);
                 }
             }
@@ -213,7 +223,7 @@ impl SockAddr {
             AddressFamily::INet => Ok(core::mem::size_of::<SockAddrIn>()),
             AddressFamily::Packet => Ok(core::mem::size_of::<SockAddrLl>()),
             AddressFamily::Netlink => Ok(core::mem::size_of::<SockAddrNl>()),
-            AddressFamily::Unix => Err(SystemError::EINVAL),
+            AddressFamily::Unix => Ok(core::mem::size_of::<SockAddrUn>()),
             _ => Err(SystemError::EINVAL),
         }
         .map(|x| x as u32)
@@ -259,6 +269,10 @@ impl SockAddr {
         *addr_len = self.len()?;
         return Ok(to_write);
     }
+
+    pub unsafe fn is_empty(&self) -> bool {
+        unsafe { self.family == 0 && self.addr_ph.data == [0; 14] }
+    }
 }
 
 impl From<Endpoint> for SockAddr {
@@ -292,7 +306,7 @@ impl From<Endpoint> for SockAddr {
                 };
 
                 return SockAddr { addr_ll };
-            },
+            }
 
             Endpoint::Netlink(netlink_endpoint) => {
                 let addr_nl = SockAddrNl {
@@ -303,7 +317,23 @@ impl From<Endpoint> for SockAddr {
                 };
 
                 return SockAddr { addr_nl };
-            },
+            }
+
+            Endpoint::Inode((_, path)) => {
+                log::debug!("from unix path {:?}", path);
+                let bytes = path.as_bytes();
+                let mut sun_path = [0u8; 108];
+                if bytes.len() <= 108 {
+                    sun_path[..bytes.len()].copy_from_slice(bytes);
+                } else {
+                    panic!("unix address path too long!");
+                }
+                let addr_un = SockAddrUn {
+                    sun_family: AddressFamily::Unix as u16,
+                    sun_path: sun_path,
+                };
+                return SockAddr { addr_un };
+            }
 
             _ => {
                 // todo: support other endpoint, like Netlink...

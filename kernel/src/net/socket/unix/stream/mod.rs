@@ -1,19 +1,22 @@
-use alloc::sync::{Arc, Weak};
+use crate::sched::SchedMode;
+use alloc::{
+    string::String,
+    sync::{Arc, Weak},
+};
 use inner::{Connected, Init, Inner, Listener};
 use log::debug;
 use system_error::SystemError;
 use unix::INODE_MAP;
-use crate::sched::SchedMode;
 
 use crate::{
-    libs::rwlock::RwLock, net::socket::{self, *}
+    libs::rwlock::RwLock,
+    net::socket::{self, *},
 };
-
 
 pub mod inner;
 
 #[derive(Debug)]
-pub struct StreamSocket {           
+pub struct StreamSocket {
     inner: RwLock<Inner>,
     _shutdown: Shutdown,
     _epitems: EPollItems,
@@ -37,6 +40,22 @@ impl StreamSocket {
         })
     }
 
+    pub fn new_pairs() -> Result<(Arc<Inode>, Arc<Inode>), SystemError> {
+        let socket0 = StreamSocket::new();
+        let socket1 = StreamSocket::new();
+        let inode0 = Inode::new(socket0.clone());
+        let inode1 = Inode::new(socket1.clone());
+
+        let (conn_0, conn_1) = Connected::new_pair(
+            Some(Endpoint::Inode((inode0.clone(), String::from("")))),
+            Some(Endpoint::Inode((inode1.clone(), String::from("")))),
+        );
+        *socket0.inner.write() = Inner::Connected(conn_0);
+        *socket1.inner.write() = Inner::Connected(conn_1);
+
+        return Ok((inode0, inode1));
+    }
+
     pub fn new_connected(connected: Connected) -> Arc<Self> {
         Arc::new_cyclic(|me| Self {
             inner: RwLock::new(Inner::Connected(connected)),
@@ -52,23 +71,15 @@ impl StreamSocket {
         let inode = Inode::new(socket.clone());
 
         let _ = match &mut *socket.inner.write() {
-            Inner::Init(init) => init.bind(Endpoint::Inode(inode.clone())),
+            Inner::Init(init) => init.bind(Endpoint::Inode((inode.clone(), String::from("")))),
             _ => return Err(SystemError::EINVAL),
         };
 
-        return Ok(inode)
-    }
-
-    pub fn new_pairs() -> (Arc<Self>, Arc<Self>) {
-        let (conn, peer_conn) = Connected::new_pair(None, None);
-        (
-            StreamSocket::new_connected(conn),
-            StreamSocket::new_connected(peer_conn),
-        )
+        return Ok(inode);
     }
 
     fn is_acceptable(&self) -> bool {
-        match & *self.inner.read() {
+        match &*self.inner.read() {
             Inner::Listener(listener) => listener.is_acceptable(),
             _ => {
                 panic!("the socket is not listening");
@@ -77,34 +88,31 @@ impl StreamSocket {
     }
 
     pub fn try_accept(&self) -> Result<(Arc<Inode>, Endpoint), SystemError> {
-        match &* self.inner.read() {
+        match &*self.inner.read() {
             Inner::Listener(listener) => listener.try_accept() as _,
             _ => {
                 log::error!("the socket is not listening");
-                return Err(SystemError::EINVAL)
+                return Err(SystemError::EINVAL);
             }
         }
     }
-
 }
-
 
 impl Socket for StreamSocket {
     fn connect(&self, server_endpoint: Endpoint) -> Result<(), SystemError> {
         //获取客户端地址
         let client_endpoint = match &mut *self.inner.write() {
-            Inner::Init(init) => {
-                match init.endpoint().cloned() {
-                    Some(endpoint) => {
-                        debug!("bind when connected");
-                        Some(endpoint)
-                    },
-                    None => {
-                        debug!("not bind when connected");
-                        let inode = Inode::new(self.self_ref.upgrade().unwrap().clone());
-                        let _ = init.bind(Endpoint::Inode(inode.clone()));
-                        Some(Endpoint::Inode(inode.clone()))
-                    }
+            Inner::Init(init) => match init.endpoint().cloned() {
+                Some(endpoint) => {
+                    debug!("bind when connected");
+                    Some(endpoint)
+                }
+                None => {
+                    debug!("not bind when connected");
+                    let inode = Inode::new(self.self_ref.upgrade().unwrap().clone());
+                    let epoint = Endpoint::Inode((inode.clone(), String::from("")));
+                    let _ = init.bind(epoint.clone());
+                    Some(epoint)
                 }
             },
             Inner::Connected(_) => return Err(SystemError::EISCONN),
@@ -117,13 +125,13 @@ impl Socket for StreamSocket {
         // };
 
         //找到对端socket
-        let peer_inode = match server_endpoint {
-            Endpoint::Inode(inode) => inode,
-            Endpoint::InodeId(inode_id) => {
+        let (peer_inode, sun_path) = match server_endpoint {
+            Endpoint::Inode((inode, path)) => (inode, path),
+            Endpoint::Unixpath((inode_id, path)) => {
                 let inode_guard = INODE_MAP.read_irqsave();
                 let inode = inode_guard.get(&inode_id).unwrap();
                 match inode {
-                    Endpoint::Inode(inode) => inode.clone(),
+                    Endpoint::Inode((inode, _)) => (inode.clone(), path),
                     _ => return Err(SystemError::EINVAL),
                 }
             }
@@ -131,19 +139,20 @@ impl Socket for StreamSocket {
         };
 
         let remote_socket: Arc<StreamSocket> =
-        Arc::downcast::<StreamSocket>(peer_inode.inner()).map_err(|_| SystemError::EINVAL)?;
+            Arc::downcast::<StreamSocket>(peer_inode.inner()).map_err(|_| SystemError::EINVAL)?;
 
         //创建新的对端socket
         let new_server_socket = StreamSocket::new();
         let new_server_inode = Inode::new(new_server_socket.clone());
-        let new_server_endpoint = Some(Endpoint::Inode(new_server_inode.clone()));
+        let new_server_endpoint = Some(Endpoint::Inode((new_server_inode.clone(), sun_path)));
         //获取connect pair
-        let (client_conn, server_conn) = Connected::new_pair(client_endpoint, new_server_endpoint.clone());
+        let (client_conn, server_conn) =
+            Connected::new_pair(client_endpoint, new_server_endpoint.clone());
         *new_server_socket.inner.write() = Inner::Connected(server_conn);
 
         //查看remote_socket是否处于监听状态
         let remote_listener = remote_socket.inner.write();
-        match & *remote_listener {
+        match &*remote_listener {
             Inner::Listener(listener) => {
                 //往服务端socket的连接队列中添加connected
                 listener.push_incoming(new_server_inode)?;
@@ -157,14 +166,19 @@ impl Socket for StreamSocket {
     }
 
     fn bind(&self, endpoint: Endpoint) -> Result<(), SystemError> {
-        let inode = self.get_name()?;
-        
         match endpoint {
-            Endpoint::InodeId(inodeid) => {
+            Endpoint::Unixpath((inodeid, path)) => {
+                let inode = match &mut *self.inner.write() {
+                    Inner::Init(init) => init.bind_path(path)?,
+                    _ => {
+                        log::error!("socket has listen or connected");
+                        return Err(SystemError::EINVAL);
+                    }
+                };
                 INODE_MAP.write_irqsave().insert(inodeid, inode);
                 Ok(())
             }
-            _ => return Err(SystemError::EINVAL)
+            _ => return Err(SystemError::EINVAL),
         }
     }
 
@@ -174,10 +188,8 @@ impl Socket for StreamSocket {
 
     fn listen(&self, backlog: usize) -> Result<(), SystemError> {
         let mut inner = self.inner.write();
-        let epoint = match & *inner {
-            Inner::Init(init) => {
-                init.endpoint().ok_or(SystemError::EINVAL)?.clone()
-            }
+        let epoint = match &*inner {
+            Inner::Init(init) => init.endpoint().ok_or(SystemError::EINVAL)?.clone(),
             Inner::Connected(_) => {
                 return Err(SystemError::EINVAL);
             }
@@ -202,11 +214,9 @@ impl Socket for StreamSocket {
             }) {
                 Ok((socket, endpoint)) => {
                     debug!("server accept!:{:?}", endpoint);
-                    return Ok((socket, endpoint))
-                },
-                Err(_) => {
-                    continue
-                },
+                    return Ok((socket, endpoint));
+                }
+                Err(_) => continue,
             }
         }
     }
@@ -235,31 +245,29 @@ impl Socket for StreamSocket {
 
     fn get_peer_name(&self) -> Result<Endpoint, SystemError> {
         //获取对端地址
-        let endpoint = match  &*self.inner.read() {
+        let endpoint = match &*self.inner.read() {
             Inner::Connected(connected) => connected.peer_endpoint().cloned(),
-            _ =>return Err(SystemError::ENOTCONN)
+            _ => return Err(SystemError::ENOTCONN),
         };
-        
-        if let Some(endpoint) = endpoint{
+
+        if let Some(endpoint) = endpoint {
             return Ok(Endpoint::from(endpoint));
-        }
-        else {
+        } else {
             return Err(SystemError::EAGAIN_OR_EWOULDBLOCK);
         }
     }
 
     fn get_name(&self) -> Result<Endpoint, SystemError> {
         //获取本端地址
-        let endpoint = match & *self.inner.read() {
+        let endpoint = match &*self.inner.read() {
             Inner::Init(init) => init.endpoint().cloned(),
             Inner::Connected(connected) => connected.endpoint().cloned(),
             Inner::Listener(listener) => listener.endpoint().cloned(),
         };
 
-        if let Some(endpoint) = endpoint{
+        if let Some(endpoint) = endpoint {
             return Ok(Endpoint::from(endpoint));
-        }
-        else {
+        } else {
             return Err(SystemError::EAGAIN_OR_EWOULDBLOCK);
         }
     }
@@ -281,7 +289,7 @@ impl Socket for StreamSocket {
     fn recv(&self, buffer: &mut [u8], flags: socket::MessageFlag) -> Result<usize, SystemError> {
         debug!("stream recv!");
         let inner = self.inner.read();
-        let conn = match & *inner {
+        let conn = match &*inner {
             Inner::Connected(connected) => connected,
             _ => return Err(SystemError::EINVAL),
         };
@@ -292,9 +300,9 @@ impl Socket for StreamSocket {
             loop {
                 match conn.try_recv(buffer) {
                     Ok(len) => {
-                        debug!("stream recv finish!");                     
-                        return Ok(len)
-                    },
+                        debug!("stream recv finish!");
+                        return Ok(len);
+                    }
                     Err(_) => continue,
                 }
             }
@@ -310,7 +318,7 @@ impl Socket for StreamSocket {
         _address: Option<Endpoint>,
     ) -> Result<(usize, Endpoint), SystemError> {
         debug!("stream recv from!");
-        match & *self.inner.write() {
+        match &*self.inner.write() {
             Inner::Connected(connected) => {
                 if flags.contains(MessageFlag::OOB) {
                     return Err(SystemError::EOPNOTSUPP_OR_ENOTSUP);
@@ -318,7 +326,9 @@ impl Socket for StreamSocket {
                 if !flags.contains(MessageFlag::DONTWAIT) {
                     loop {
                         match connected.try_recv(buffer) {
-                            Ok(usize) => return Ok((usize, connected.peer_endpoint().unwrap().clone())),
+                            Ok(usize) => {
+                                return Ok((usize, connected.peer_endpoint().unwrap().clone()))
+                            }
                             Err(_) => continue,
                         }
                     }
@@ -344,7 +354,7 @@ impl Socket for StreamSocket {
     fn send(&self, buffer: &[u8], flags: socket::MessageFlag) -> Result<usize, SystemError> {
         debug!("stream socket send!");
         let inner = self.inner.read();
-        let conn = match & *inner {
+        let conn = match &*inner {
             Inner::Connected(connected) => connected,
             _ => return Err(SystemError::EINVAL),
         };
@@ -356,11 +366,9 @@ impl Socket for StreamSocket {
                 match conn.try_send(buffer) {
                     Ok(len) => {
                         debug!("stream socket finish send!");
-                        return Ok(len)
-                    },
-                    Err(_) => {
-                        continue
-                    },
+                        return Ok(len);
+                    }
+                    Err(_) => continue,
                 }
             }
         } else {

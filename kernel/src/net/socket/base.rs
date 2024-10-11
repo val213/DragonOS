@@ -1,12 +1,11 @@
-
 #![allow(unused_variables)]
 
-use core::any::Any;
-use core::fmt::Debug;
-use alloc::sync::Arc;
-use system_error::SystemError::{self, *};
 use crate::net::socket::*;
 use crate::net::syscall_util::MsgHdr;
+use alloc::sync::Arc;
+use core::any::Any;
+use core::fmt::Debug;
+use system_error::SystemError::{self, *};
 
 /// # `Socket` methods
 /// ## Reference
@@ -36,7 +35,7 @@ pub trait Socket: Sync + Send + Debug + Any {
     /// # `close`
     /// 关闭socket
     fn close(&self) -> Result<(), SystemError> {
-        Err(ENOSYS)
+        Ok(())
     }
     /// # `connect`
     /// 对应于POSIX的connect函数，用于连接到指定的远程服务器端点

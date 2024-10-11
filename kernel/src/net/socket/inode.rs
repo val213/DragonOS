@@ -51,7 +51,7 @@ impl IndexNode for Inode {
         &self,
         private_data: &crate::filesystem::vfs::FilePrivateData,
     ) -> Result<usize, SystemError> {
-        drop(private_data);
+        // let _ = private_data;
         Ok(self.inner.poll())
     }
 
@@ -67,13 +67,17 @@ impl IndexNode for Inode {
         let meta = crate::filesystem::vfs::Metadata {
             mode: crate::filesystem::vfs::syscall::ModeType::from_bits_truncate(0o755),
             file_type: crate::filesystem::vfs::FileType::Socket,
+            size: self.send_buffer_size() as i64,
             ..Default::default()
         };
 
         return Ok(meta);
     }
 
-    fn close(&self, _data: crate::libs::spinlock::SpinLockGuard<crate::filesystem::vfs::FilePrivateData>) -> Result<(), SystemError> {
+    fn close(
+        &self,
+        _data: crate::libs::spinlock::SpinLockGuard<crate::filesystem::vfs::FilePrivateData>,
+    ) -> Result<(), SystemError> {
         self.inner.close()
     }
 }
@@ -145,7 +149,6 @@ impl Inode {
         flags: MessageFlag,
         address: Option<Endpoint>,
     ) -> Result<(usize, Endpoint), SystemError> {
-
         self.inner.recv_from(buffer, flags, address)
     }
 
@@ -186,7 +189,7 @@ impl Inode {
         log::warn!("close_on_exec is not support yet");
     }
 
-    pub fn inner(&self)->Arc<dyn Socket>{
+    pub fn inner(&self) -> Arc<dyn Socket> {
         return self.inner.clone();
     }
 }

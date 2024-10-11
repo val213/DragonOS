@@ -464,11 +464,6 @@ impl Syscall {
                 let addr = args[1] as *const SockAddr;
                 let addrlen = args[2];
                 let virt_addr = VirtAddr::new(addr as usize);
-                log::debug!(
-                    "SYS_BIND: bind addr.addr_nl: {:?}, addrlen: {}",
-                    (unsafe { addr.as_ref().unwrap().addr_nl }),
-                    addrlen
-                );
                 // 验证addr的地址是否合法
                 if verify_area(virt_addr, addrlen).is_err() {
                     // 地址空间超出了用户空间的范围，不合法
@@ -1108,6 +1103,12 @@ impl Syscall {
                 let from_user = frame.is_from_user();
 
                 Self::shmctl(id, cmd, user_buf, from_user)
+            }
+            SYS_MSYNC => {
+                let start = page_align_up(args[0]);
+                let len = page_align_up(args[1]);
+                let flags = args[2];
+                Self::msync(VirtAddr::new(start), len, flags)
             }
             SYS_UTIMENSAT => Self::sys_utimensat(
                 args[0] as i32,
