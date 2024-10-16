@@ -116,7 +116,6 @@ impl AcpiManager {
             acpi_table_attr_list().write().push(attr);
             self.acpi_table_data_init(&header)?;
         }
-        // TODO:UEVENT
         unsafe {
             let _ = kobject_uevent(
                 acpi_tables_kset.clone() as Arc<dyn KObject>,

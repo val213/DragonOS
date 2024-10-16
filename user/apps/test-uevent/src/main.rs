@@ -1,5 +1,8 @@
-use libc::{sockaddr,  recvfrom, bind, sendto, socket, AF_NETLINK, SOCK_DGRAM, getpid, c_void};
-use nix::libc;
+use libc::{sockaddr,  recvfrom, bind, socket, setsockopt, AF_NETLINK, SOCK_DGRAM, getpid, c_void};
+use netlink_sys::constants::NETLINK_ADD_MEMBERSHIP;
+use nix::libc::{self,  SOL_SOCKET};
+use std::fs::File;
+use std::io::Write;
 use std::os::unix::io::RawFd;
 use std::{ mem, io};
 
@@ -21,7 +24,6 @@ fn create_netlink_socket() -> io::Result<RawFd> {
         println!("Error: {}", io::Error::last_os_error());
         return Err(io::Error::last_os_error());
     }
-
     Ok(sockfd)
 }
 
@@ -41,48 +43,11 @@ fn bind_netlink_socket(sock: RawFd) -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
 
-    Ok(())
-}
+    
+    unsafe { setsockopt(sock, SOL_SOCKET,NETLINK_ADD_MEMBERSHIP, &addr.nl_groups as *const _ as *const c_void,
+        size_of::<u32>() as libc::socklen_t)};
 
-fn send_uevent(sock: RawFd, message: &str) -> io::Result<()> {
-    let mut addr: libc::sockaddr_nl = unsafe { mem::zeroed() };
-    addr.nl_family = AF_NETLINK as u16;
-    addr.nl_pid = 0;
-    addr.nl_groups = 0;
-
-    let nlmsghdr = Nlmsghdr {
-        nlmsg_len: (mem::size_of::<Nlmsghdr>() + message.len()) as u32,
-        nlmsg_type: 0,
-        nlmsg_flags: 0,
-        nlmsg_seq: 0,
-        nlmsg_pid: 0,
-    };
-
-    let mut buffer = Vec::with_capacity(nlmsghdr.nlmsg_len as usize);
-    buffer.extend_from_slice(unsafe {
-        std::slice::from_raw_parts(
-            &nlmsghdr as *const Nlmsghdr as *const u8,
-            mem::size_of::<Nlmsghdr>(),
-        )
-    });
-    buffer.extend_from_slice(message.as_bytes());
-
-    let ret = unsafe {
-        sendto(
-            sock,
-            buffer.as_ptr() as *const c_void,
-            buffer.len(),
-            0,
-            &addr as *const _ as *const sockaddr,
-            mem::size_of::<libc::sockaddr_nl>() as u32,
-        )
-    };
-
-    if ret < 0 {
-        println!("Error: {}", io::Error::last_os_error());
-        return Err(io::Error::last_os_error());
-    }
-
+    println!("bind and setsockopt success");
     Ok(())
 }
 
@@ -135,6 +100,16 @@ fn receive_uevent(sock: RawFd) -> io::Result<String> {
     Ok(String::from_utf8_lossy(message_data).to_string())
 }
 
+
+// 模拟写入设备的uevent文件，通常在 /sys/class/net/{设备名称}/uevent
+fn trigger_device_uevent(device: &str) -> io::Result<()> {
+    let uevent_path = format!("/sys/class/net/{}/uevent", device);
+    let mut file = File::create(uevent_path)?;
+    file.write_all(b"add\n")?;
+    println!("Triggered uevent for device {}", device);
+    Ok(())
+}
+
 fn main() {
     let socket = create_netlink_socket().expect("Failed to create Netlink socket");
     println!("Netlink socket created successfully");
@@ -142,8 +117,9 @@ fn main() {
     bind_netlink_socket(socket).expect("Failed to bind Netlink socket");
     println!("Netlink socket created and bound successfully");
 
-    send_uevent(socket, "add@/devices/virtual/block/loop0").expect("Failed to send uevent message");
-    println!("Custom uevent message sent successfully");
+    // 向指定网卡设备的 uevent 文件写入事件，模拟设备触发 uevent
+    trigger_device_uevent("eth0").expect("Failed to trigger device uevent");
+    println!("Device uevent triggered");
 
     let message = receive_uevent(socket).expect("Failed to receive uevent message");
     println!("Received uevent message: {}", message);

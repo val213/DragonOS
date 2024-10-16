@@ -7,6 +7,7 @@ pub mod sock;
 
 use super::{family, inet::datagram, Inode, Socket, Type};
 use crate::driver::base::uevent::KobjUeventEnv;
+use crate::libs::spinlock::SpinLock;
 use alloc::sync::Arc;
 use alloc::{boxed::Box, slice, vec::Vec};
 use system_error::SystemError;
@@ -267,7 +268,7 @@ pub fn netlink_kernel_create(
     cfg: Option<NetlinkKernelCfg>,
 ) -> Result<NetlinkSock, SystemError> {
     let mut nlk: NetlinkSock = NetlinkSock::new(Some(unit));
-    let sk: Arc<Mutex<NetlinkSock>> = Arc::new(Mutex::new(nlk.clone()));
+    let sk: Arc<SpinLock<NetlinkSock>> = Arc::new(SpinLock::new(nlk.clone()));
     let groups: u32;
     if unit >= MAX_LINKS {
         return Err(SystemError::EINVAL);
@@ -330,6 +331,7 @@ impl family::Family for Netlink {
     /// 用户空间创建一个新的套接字的入口
     fn socket(stype: Type, _protocol: u32) -> Result<Arc<Inode>, SystemError> {
         let socket = create_netlink_socket(_protocol as usize)?;
+        log::debug!("create netlink socket: {:?}", socket);
         Ok(Inode::new(socket))
     }
 }

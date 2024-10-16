@@ -24,7 +24,7 @@ use crate::{
             device::{
                 bus::Bus,
                 driver::{Driver, DriverCommonData},
-                CommonAttrGroup, Device, DeviceCommonData, DeviceId, DeviceType, IdTable,
+                Device, DeviceCommonData, DeviceId, DeviceType, IdTable,
             },
             kobject::{KObjType, KObject, KObjectCommonData, KObjectState, LockedKObjectState},
             kset::KSet,
@@ -409,7 +409,7 @@ impl Device for VirtIOBlkDevice {
     }
 
     fn attribute_groups(&self) -> Option<&'static [&'static dyn AttributeGroup]> {
-        Some(&[&CommonAttrGroup])
+        None
     }
 }
 
@@ -476,12 +476,12 @@ fn virtio_blk_driver_init() -> Result<(), SystemError> {
     let driver = VirtIOBlkDriver::new();
     virtio_driver_manager()
         .register(driver.clone() as Arc<dyn VirtIODriver>)
-        .expect("Add virtio block driver failed");
+        .map_err(|_| SystemError::EINVAL)?;
     unsafe {
         VIRTIO_BLK_DRIVER = Some(driver);
     }
 
-    return Ok(());
+    Ok(())
 }
 
 #[derive(Debug)]

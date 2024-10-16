@@ -8,7 +8,6 @@ use crate::init::initcall::INITCALL_POSTCORE;
 use crate::libs::mutex::Mutex;
 use crate::libs::rwlock::RwLock;
 use crate::net::socket::netlink::af_netlink::netlink_has_listeners;
-use crate::net::socket::netlink::af_netlink::NetlinkSocket;
 use crate::net::socket::netlink::af_netlink::{netlink_broadcast, NetlinkSock};
 use crate::net::socket::netlink::skbuff::SkBuff;
 use crate::net::socket::netlink::{
@@ -44,10 +43,6 @@ impl UeventSock {
 lazy_static::lazy_static! {
     static ref UEVENT_SOCK_LIST: Mutex<LinkedList<UeventSock>> = Mutex::new(LinkedList::new());
 }
-// 回调函数，当接收到 uevent 消息时调用
-fn uevent_net_rcv() {
-    // netlink_rcv_skb(skb, &uevent_net_rcv_skb);
-}
 
 /// 内核初始化的时候，在设备初始化之前执行
 #[unified_init(INITCALL_POSTCORE)]
@@ -55,7 +50,7 @@ fn kobejct_uevent_init() -> Result<(), SystemError> {
     // todo: net namespace
     return uevent_net_init();
 }
-// TODO：等net namespace实现后添加 net 参数和相关操作
+// TODO：等 net namespace 实现后添加 net 参数和相关操作
 // 内核启动的时候，即使没有进行网络命名空间的隔离也需要调用这个函数
 // 支持 net namespace 之后需要在每个 net namespace 初始化的时候调用这个函数
 /// 为每一个 net namespace 初始化 uevent
@@ -67,9 +62,6 @@ fn uevent_net_init() -> Result<(), SystemError> {
     };
     // 创建一个内核 netlink socket
     let ue_sk = UeventSock::new(netlink_kernel_create(NETLINK_KOBJECT_UEVENT, Some(cfg)).unwrap());
-
-    // todo: net namespace
-    // net.uevent_sock = ue_sk;
 
     // 每个 net namespace 向链表中添加一个新的 uevent socket
     UEVENT_SOCK_LIST.lock().push_back(ue_sk);
@@ -400,6 +392,5 @@ pub fn uevent_net_broadcast_untagged(
             retval = 0;
         }
     }
-    // consume_skb(skb);
     retval
 }

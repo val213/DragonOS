@@ -1,4 +1,5 @@
 use crate::driver::base::uevent::kobject_uevent::kobject_uevent_env;
+use crate::filesystem::sysfs::file::sysfs_emit_str;
 use core::fmt::Write;
 /*
 Struct
@@ -22,8 +23,6 @@ use intertrait::cast::CastArc;
 use log::warn;
 use system_error::SystemError;
 
-use super::block::block_device::{BlockDevice, BlockDeviceOps};
-use super::char::CharDevice;
 use super::device::{Device, DeviceType};
 
 pub mod kobject_uevent;
@@ -202,17 +201,6 @@ impl Attribute for UeventAttr {
         log::info!("store uevent");
         return kobject_synth_uevent(_buf, _kobj);
     }
-}
-
-/// 将设备的基本信息写入 uevent 文件
-fn sysfs_emit_str(buf: &mut [u8], content: &str) -> Result<usize, SystemError> {
-    log::info!("sysfs_emit_str");
-    let bytes = content.as_bytes();
-    if buf.len() < bytes.len() {
-        return Err(SystemError::ENOMEM);
-    }
-    buf[..bytes.len()].copy_from_slice(bytes);
-    Ok(bytes.len())
 }
 
 /// 解析用户空间写入的 uevent 信息，触发 uevent 事件
