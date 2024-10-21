@@ -320,7 +320,7 @@ fn __netlink_create(nlk: &mut NetlinkSock, unit: usize, kern: usize) -> Result<i
     return Ok(0);
 }
 
-pub fn sk_data_ready(nlk: Arc<NetlinkSock>) -> Result<(), SystemError> {
+pub fn sk_data_ready(nlk: Arc<SpinLock<NetlinkSock>>) -> Result<(), SystemError> {
     // 唤醒
     return Ok(());
 }

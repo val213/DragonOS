@@ -44,10 +44,10 @@ fn bind_netlink_socket(sock: RawFd) -> io::Result<()> {
     }
 
     
-    unsafe { setsockopt(sock, SOL_SOCKET,NETLINK_ADD_MEMBERSHIP, &addr.nl_groups as *const _ as *const c_void,
-        size_of::<u32>() as libc::socklen_t)};
+    // unsafe { setsockopt(sock, SOL_SOCKET,NETLINK_ADD_MEMBERSHIP, &addr.nl_groups as *const _ as *const c_void,
+    //     size_of::<u32>() as libc::socklen_t)};
 
-    println!("bind and setsockopt success");
+    println!("bind success");
     Ok(())
 }
 

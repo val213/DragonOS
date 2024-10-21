@@ -343,8 +343,14 @@ pub fn alloc_uevent_skb<'a>(
     action_string: &'a str,
     devpath: &'a str,
 ) -> Arc<RwLock<SkBuff>> {
-    let skb = Arc::new(RwLock::new(SkBuff::new(None)));
+    let len = action_string.len() + devpath.len() + 2;
+    let skb = alloc_skb(len + env.buflen);
+    log::info!("alloc_uevent_skb: action_string: {}, devpath: {}", action_string, devpath);
     skb
+}
+// 分配一个具有指定大小的 skb，内容为空
+fn alloc_skb(size:usize) -> Arc<RwLock<SkBuff>>{
+    Arc::new(RwLock::new(SkBuff::new(None)))
 }
 // https://code.dragonos.org.cn/xref/linux-6.1.9/lib/kobject_uevent.c#309
 ///  广播一个未标记的 uevent 消息
@@ -371,12 +377,7 @@ pub fn uevent_net_broadcast_untagged(
         }
         // 如果 skb 为空，则分配一个新的 skb
         if skb.read().inner.is_empty() {
-            log::info!("uevent_net_broadcast_untagged: alloc_uevent_skb failed");
-            retval = SystemError::ENOMEM.to_posix_errno();
             skb = alloc_uevent_skb(env, action_string, devpath);
-            if skb.read().inner.is_empty() {
-                continue;
-            }
         }
         log::info!("next is netlink_broadcast");
         let netlink_socket = Arc::new(ue_sk.inner.clone());

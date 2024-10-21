@@ -1,27 +1,24 @@
-use super::af_netlink::{NetlinkSock, NetlinkSocket};
-use crate::libs::{mutex::Mutex, rwlock::RwLock, spinlock::SpinLock};
-use alloc::{boxed::Box, sync::Arc, vec::Vec};
-use uefi_raw::protocol;
+use super::af_netlink::NetlinkSock;
+use crate::libs::{ rwlock::RwLock, spinlock::SpinLock};
+use alloc::{sync::Arc, vec::Vec};
 const SKB_SIZE: usize = 4096; // 定义 SKB 的大小
 #[derive(Debug, Clone)]
 pub struct SkBuff {
     pub sk: Arc<SpinLock<NetlinkSock>>,
-    pub len: u32,
-    pub inner: Vec<u8>,
+    pub inner: Vec<Vec<u8>>
 }
 impl SkBuff {
     pub fn new(protocol: Option<usize>) -> Self {
         SkBuff {
             sk: Arc::new(SpinLock::new(NetlinkSock::new(protocol))),
-            len: 0,
-            inner: vec![0u8; SKB_SIZE],
+            inner: Vec::new()
         }
     }
 }
 
 // 处理网络套接字的过度运行情况
 pub fn netlink_overrun(sk: &Arc<SpinLock<NetlinkSock>>) {
-    todo!()
+    // todo!()
 }
 
 // 用于检查网络数据包(skb)是否被共享
@@ -35,6 +32,7 @@ pub fn skb_shared(skb: &RwLock<SkBuff>) -> bool {
 /// 通常是因为发送数据包时指定了 MSG_DONTWAIT 标志，这告诉内核不要等待必要的资源（如内存），而是尽可能快地发送数据包。
 pub fn skb_orphan(skb: &Arc<RwLock<SkBuff>>) {
     // todo!()
+    log::debug!("skb_orphan");
 }
 
 fn skb_recv_datagram() {}
