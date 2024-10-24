@@ -290,6 +290,8 @@ pub fn netlink_kernel_create(
     // if cfg.is_some() && cfg.unwrap().input.is_some(){
     //     nlk.netlink_rcv = cfg.unwrap().input;
     // }
+    
+    // 插入内核套接字
     netlink_insert(sk, 0).expect("netlink_insert failed");
     nlk.flags |= NetlinkFlags::NETLINK_F_KERNEL_SOCKET.bits();
 

@@ -68,6 +68,7 @@ impl Syscall {
         let mut fd_table_guard = binding.write();
         let fd: Result<usize, SystemError> =
             fd_table_guard.alloc_fd(file, None).map(|x| x as usize);
+        log::debug!("socket: fd={:?}", fd);
         drop(fd_table_guard);
         return fd;
     }
@@ -246,12 +247,12 @@ impl Syscall {
     /// @return 成功返回0，失败返回错误码
     pub fn bind(fd: usize, addr: *const SockAddr, addrlen: u32) -> Result<usize, SystemError> {
         // 打印收到的参数
-        // log::debug!(
-        //     "bind: fd={:?}, family={:?}, addrlen={:?}",
-        //     fd,
-        //     (unsafe { addr.as_ref().unwrap().family }),
-        //     addrlen
-        // );
+        log::debug!(
+            "bind: fd={:?}, family={:?}, addrlen={:?}",
+            fd,
+            (unsafe { addr.as_ref().unwrap().family }),
+            addrlen
+        );
         let endpoint: Endpoint = SockAddr::to_endpoint(addr, addrlen)?;
         let socket: Arc<socket::Inode> = ProcessManager::current_pcb()
             .get_socket(fd as i32)
@@ -312,9 +313,18 @@ impl Syscall {
         addr: *mut SockAddr,
         addr_len: *mut u32,
     ) -> Result<usize, SystemError> {
+        log::info!(
+            "recvfrom: fd={}, buf={:?}, flags={}, addr={:?}, addr_len={:?}",
+            fd,
+            buf,
+            flags,
+            addr,
+            addr_len
+        );
         let socket: Arc<socket::Inode> = ProcessManager::current_pcb()
             .get_socket(fd as i32)
             .ok_or(SystemError::EBADF)?;
+        log::info!("get socket: {:?}", socket);
         let flags = socket::MessageFlag::from_bits_truncate(flags);
 
         if addr.is_null() {

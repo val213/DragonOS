@@ -917,8 +917,8 @@ impl ProcessControlBlock {
     /// Option(&mut Box<dyn Socket>) socket对象的可变引用. 如果文件描述符不是socket，那么返回None
     pub fn get_socket(&self, fd: i32) -> Option<Arc<SocketInode>> {
         let binding = ProcessManager::current_pcb().fd_table();
+        log::trace!("get_socket: fd={}", fd);
         let fd_table_guard = binding.read();
-
         let f = fd_table_guard.get_file_by_fd(fd)?;
         drop(fd_table_guard);
 

@@ -7,7 +7,7 @@ use crate::driver::base::kobject::{KObjectManager, KObjectState};
 use crate::init::initcall::INITCALL_POSTCORE;
 use crate::libs::mutex::Mutex;
 use crate::libs::rwlock::RwLock;
-use crate::net::socket::netlink::af_netlink::netlink_has_listeners;
+use crate::libs::spinlock::SpinLock;
 use crate::net::socket::netlink::af_netlink::{netlink_broadcast, NetlinkSock};
 use crate::net::socket::netlink::skbuff::SkBuff;
 use crate::net::socket::netlink::{
@@ -60,7 +60,7 @@ fn uevent_net_init() -> Result<(), SystemError> {
         flags: NL_CFG_F_NONROOT_RECV,
         ..Default::default()
     };
-    // 创建一个内核 netlink socket
+    // 为 NETLINK_KOBJECT_UEVENT 协议创建一个内核 netlink socket
     let ue_sk = UeventSock::new(netlink_kernel_create(NETLINK_KOBJECT_UEVENT, Some(cfg)).unwrap());
 
     // 每个 net namespace 向链表中添加一个新的 uevent socket
@@ -69,11 +69,6 @@ fn uevent_net_init() -> Result<(), SystemError> {
     return Ok(());
 }
 
-// 系统关闭时清理
-fn uevent_net_exit() {
-    // 清理链表
-    UEVENT_SOCK_LIST.lock().clear();
-}
 
 /// kobject_uevent，和kobject_uevent_env功能一样，只是没有指定任何的环境变量
 pub fn kobject_uevent(kobj: Arc<dyn KObject>, action: KobjectAction) -> Result<(), SystemError> {
@@ -83,7 +78,7 @@ pub fn kobject_uevent(kobj: Arc<dyn KObject>, action: KobjectAction) -> Result<(
         Err(e) => Err(e),
     }
 }
-
+// https://code.dragonos.org.cn/xref/linux-6.1.9/lib/kobject_uevent.c#309
 ///  kobject_uevent_env，以 envp 为环境变量，上报一个指定 action 的 uevent。环境变量的作用是为执行用户空间程序指定运行环境。
 pub fn kobject_uevent_env(
     kobj: Arc<dyn KObject>,
@@ -186,7 +181,7 @@ pub fn kobject_uevent_env(
         log::warn!("kobject_uevent_env: devpath is empty");
         return Ok(retval);
     }
-    retval = add_uevent_var(&mut env, "ACTION=%s", &action_string).unwrap();
+    retval = env.add_uevent_var("ACTION=%s", &action_string).unwrap();
     log::info!("kobject_uevent_env: retval: {}", retval);
     if !retval.is_zero() {
         drop(devpath);
@@ -194,14 +189,14 @@ pub fn kobject_uevent_env(
         log::info!("add_uevent_var failed ACTION");
         return Ok(retval);
     };
-    retval = add_uevent_var(&mut env, "DEVPATH=%s", &devpath).unwrap();
+    retval = env.add_uevent_var("DEVPATH=%s", &devpath).unwrap();
     if !retval.is_zero() {
         drop(devpath);
         drop(env);
         log::info!("add_uevent_var failed DEVPATH");
         return Ok(retval);
     };
-    retval = add_uevent_var(&mut env, "SUBSYSTEM=%s", &subsystem).unwrap();
+    retval = env.add_uevent_var( "SUBSYSTEM=%s", &subsystem).unwrap();
     if !retval.is_zero() {
         drop(devpath);
         drop(env);
@@ -212,7 +207,7 @@ pub fn kobject_uevent_env(
     /* keys passed in from the caller */
 
     for var in envp_ext {
-        let retval = add_uevent_var(&mut env, "%s", &var).unwrap();
+        let retval = env.add_uevent_var( "%s", &var).unwrap();
         if !retval.is_zero() {
             drop(devpath);
             drop(env);
@@ -239,14 +234,13 @@ pub fn kobject_uevent_env(
             state.insert(KObjectState::ADD_UEVENT_SENT);
         }
         KobjectAction::KOBJUNBIND => {
-            zap_modalias_env(&mut env);
+            KobjUeventEnv::zap_modalias_env(&mut env);
         }
         _ => {}
     }
 
-    //mutex_lock(&uevent_sock_mutex);
     /* we will send an event, so request a new sequence number */
-    retval = add_uevent_var(&mut env, "SEQNUM=%llu", &(UEVENT_SEQNUM + 1).to_string()).unwrap();
+    retval = KobjUeventEnv::add_uevent_var(&mut env, "SEQNUM=%llu", &(UEVENT_SEQNUM + 1).to_string()).unwrap();
     if !retval.is_zero() {
         drop(devpath);
         drop(env);
@@ -261,66 +255,9 @@ pub fn kobject_uevent_env(
     return Ok(retval);
 }
 
-/// 以格式化字符的形式，将环境变量copy到env指针中。
-pub fn add_uevent_var(
-    env: &mut Box<KobjUeventEnv>,
-    format: &str,
-    args: &str,
-) -> Result<i32, SystemError> {
-    log::info!("add_uevent_var: format: {}, args: {}", format, args);
-    if env.envp_idx >= env.envp.capacity() {
-        log::info!("add_uevent_var: too many keys");
-        return Err(SystemError::ENOMEM);
-    }
 
-    let mut buffer = String::new();
-    write!(&mut buffer, "{} {}", format, args).map_err(|_| SystemError::ENOMEM)?;
-    let len = buffer.len();
 
-    if len >= env.buf.capacity() - env.buflen {
-        log::info!("add_uevent_var: buffer size too small");
-        return Err(SystemError::ENOMEM);
-    }
 
-    // Convert the buffer to bytes and add to env.buf
-    env.buf.extend_from_slice(buffer.as_bytes());
-    env.buf.push(0); // Null-terminate the string
-    env.buflen += len + 1;
-
-    // Add the string to envp
-    env.envp.push(buffer);
-    env.envp_idx += 1;
-
-    Ok(0)
-}
-
-// 用于处理设备树中与模块相关的环境变量
-fn zap_modalias_env(env: &mut Box<KobjUeventEnv>) {
-    // 定义一个静态字符串
-    const MODALIAS_PREFIX: &str = "MODALIAS=";
-    let mut len: usize;
-
-    let mut i = 0;
-    while i < env.envp_idx {
-        // 如果是以 MODALIAS= 开头的字符串
-        if env.envp[i].starts_with(MODALIAS_PREFIX) {
-            len = env.envp[i].len() + 1;
-            // 如果不是最后一个元素
-            if i != env.envp_idx - 1 {
-                // 将后续的环境变量向前移动，以覆盖掉 "MODALIAS=" 前缀的环境变量
-                for j in i..env.envp_idx - 1 {
-                    env.envp[j] = env.envp[j + 1].clone();
-                }
-            }
-            // 减少环境变量数组的索引，因为一个变量已经被移除
-            env.envp_idx -= 1;
-            // 减少环境变量的总长度
-            env.buflen -= len;
-        } else {
-            i += 1;
-        }
-    }
-}
 
 // 用于处理网络相关的uevent（通用事件）广播
 // https://code.dragonos.org.cn/xref/linux-6.1.9/lib/kobject_uevent.c#381
@@ -337,20 +274,25 @@ pub fn kobject_uevent_net_broadcast(
     ret
 }
 
-/// 分配一个用于 uevent 消息的 skb（socket buffer）。
+/// 分配一个用于 uevent 消息的 skb（socket buffer）。此 skb 将包含指定的 action_string 和 devpath。
 pub fn alloc_uevent_skb<'a>(
     env: &'a KobjUeventEnv,
     action_string: &'a str,
     devpath: &'a str,
-) -> Arc<RwLock<SkBuff>> {
+) -> SkBuff {
     let len = action_string.len() + devpath.len() + 2;
-    let skb = alloc_skb(len + env.buflen);
+    let total_len = len + env.buflen;
+    // 分配一个新的 skb
+    let mut skb = SkBuff {
+        sk: Arc::new(SpinLock::new(NetlinkSock::new(None))),
+        inner: Vec::with_capacity(total_len)
+    };
+    // 将 action_string 和 devpath 添加到 skb 中
+    skb.inner.push(format!("{}@{}", action_string, devpath).into_bytes());
+    skb.inner.push(env.buf.clone());
+
     log::info!("alloc_uevent_skb: action_string: {}, devpath: {}", action_string, devpath);
     skb
-}
-// 分配一个具有指定大小的 skb，内容为空
-fn alloc_skb(size:usize) -> Arc<RwLock<SkBuff>>{
-    Arc::new(RwLock::new(SkBuff::new(None)))
 }
 // https://code.dragonos.org.cn/xref/linux-6.1.9/lib/kobject_uevent.c#309
 ///  广播一个未标记的 uevent 消息
@@ -365,23 +307,22 @@ pub fn uevent_net_broadcast_untagged(
         devpath
     );
     let mut retval = 0;
-    let mut skb = Arc::new(RwLock::new(SkBuff::new(None)));
 
     // 锁定 UEVENT_SOCK_LIST 并遍历
     let ue_sk_list = UEVENT_SOCK_LIST.lock();
     for ue_sk in ue_sk_list.iter() {
         // 如果没有监听者，则跳过
-        if netlink_has_listeners(&ue_sk.inner, 1) == 0 {
+        if ue_sk.inner.netlink_has_listeners(1) == 0 {
             log::info!("uevent_net_broadcast_untagged: no listeners");
             continue;
         }
-        // 如果 skb 为空，则分配一个新的 skb
-        if skb.read().inner.is_empty() {
-            skb = alloc_uevent_skb(env, action_string, devpath);
-        }
+        // 分配一个新的 skb
+        let skb = alloc_uevent_skb(env, action_string, devpath);
         log::info!("next is netlink_broadcast");
         let netlink_socket = Arc::new(ue_sk.inner.clone());
-        retval = match netlink_broadcast(&netlink_socket, Arc::clone(&skb), 0, 1, 1) {
+        // portid = 0: 表示消息发送给内核或所有监听的进程，而不是特定的用户空间进程。
+        // group = 1: 表示消息发送给 netlink 多播组 ID 为 1 的组。在 netlink 广播中，组 ID 1 通常用于 uevent 消息。
+        retval = match netlink_broadcast(&netlink_socket, skb, 0, 1, 1) {
             Ok(_) => 0,
             Err(err) => err.to_posix_errno(),
         };

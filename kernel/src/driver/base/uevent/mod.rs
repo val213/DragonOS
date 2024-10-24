@@ -98,6 +98,59 @@ pub struct KobjUeventEnv {
     buf: Vec<u8>,
     buflen: usize,
 }
+impl KobjUeventEnv {
+    /// 用于处理设备树中与模块相关的环境变量
+    fn zap_modalias_env(&mut self) {
+        // 定义一个静态字符串
+        const MODALIAS_PREFIX: &str = "MODALIAS=";
+
+        // 计算要移除的环境变量的总长度
+        let total_len: usize = self.envp.iter()
+            .filter(|&var| var.starts_with(MODALIAS_PREFIX))
+            .map(|var| var.len() + 1)
+            .sum();
+
+        // 移除以 MODALIAS_PREFIX 开头的环境变量
+        self.envp.retain(|var| !var.starts_with(MODALIAS_PREFIX));
+
+        // 更新环境变量数组的索引和总长度
+        self.envp_idx = self.envp.len();
+        self.buflen -= total_len;
+    }
+
+    /// 以格式化字符的形式，将环境变量copy到env指针中。
+    pub fn add_uevent_var(
+        &mut self,
+        format: &str,
+        args: &str,
+    ) -> Result<i32, SystemError> {
+        log::info!("add_uevent_var: format: {}, args: {}", format, args);
+        if self.envp_idx >= self.envp.capacity() {
+            log::info!("add_uevent_var: too many keys");
+            return Err(SystemError::ENOMEM);
+        }
+
+        let mut buffer = String::new();
+        write!(&mut buffer, "{} {}", format, args).map_err(|_| SystemError::ENOMEM)?;
+        let len = buffer.len();
+
+        if len >= self.buf.capacity() - self.buflen {
+            log::info!("add_uevent_var: buffer size too small");
+            return Err(SystemError::ENOMEM);
+        }
+
+        // Convert the buffer to bytes and add to env.buf
+        self.buf.extend_from_slice(buffer.as_bytes());
+        self.buf.push(0); // Null-terminate the string
+        self.buflen += len + 1;
+
+        // Add the string to envp
+        self.envp.push(buffer);
+        self.envp_idx += 1;
+
+        Ok(0)
+    }
+}
 
 // kset_uevent_ops是为kset量身订做的一个数据结构，里面包含filter和uevent两个回调函数，用处如下：
 /*

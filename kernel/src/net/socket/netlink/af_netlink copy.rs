@@ -32,7 +32,7 @@ use lazy_static::lazy_static;
 use super::callback::NetlinkCallback;
 use super::endpoint::NetlinkEndpoint;
 use super::netlink_proto::{proto_register, NETLINK_PROTO};
-use super::skbuff::netlink_overrun;
+use super::skbuff::{netlink_overrun, skb_orphan, skb_shared};
 use super::sock::SockFlags;
 use super::{NLmsgFlags, NLmsgType, NLmsghdr, VecExt, NETLINK_USERSOCK, NL_CFG_F_NONROOT_SEND};
 use crate::init::initcall::INITCALL_CORE;
@@ -362,10 +362,20 @@ pub trait NetlinkSocket: Socket + Any {
     fn as_any(&self) -> &dyn Any;
 }
 
+pub trait NetlinkSocketWithCallback {
+    fn sk_data_ready(&self, callback: impl Fn(i32) -> i32);
+}
 /* linux：struct sock has to be the first member of netlink_sock */
 // linux 6.1.9中的netlink_sock结构体里，sock是一个很大的结构体，这里简化
 // 意义是：netlink_sock（NetlinkSock）是一个sock（NetlinkSocket）, 实现了 Netlinksocket trait 和 Sock trait.
 
+#[derive(Debug, Clone)]
+struct NetlinkSockMetadata {}
+impl NetlinkSockMetadata {
+    fn new() -> NetlinkSockMetadata {
+        NetlinkSockMetadata {}
+    }
+}
 #[derive(Debug, Clone)]
 #[cast_to([sync] Socket)]
 #[cast_to([sync] NetlinkSocket)]
@@ -438,6 +448,7 @@ impl Socket for NetlinkSock {
         log::debug!("NetlinkSock send_to");
         return self.netlink_send(buffer, address);
     }
+    // 借用 recv_from 的接口模拟netlink_recvmsg的功能
     fn recv_from(
         &self,
         msg: &mut [u8],
@@ -455,7 +466,7 @@ impl Socket for NetlinkSock {
         log::warn!("recv_buffer_size is implemented to 0");
         0
     }
-    // 钩子函数，用于设置socket选项
+
     fn set_option(&self, level: OptionsLevel, name: usize, val: &[u8]) -> Result<(), SystemError> {
         return netlink_setsockopt(self, level, name, val);
     }
@@ -492,7 +503,7 @@ impl IndexNode for NetlinkSock {
         Ok(Vec::new())
     }
 }
-
+// TODO: 实现 NetlinkSocket trait
 impl NetlinkSocket for NetlinkSock {
     fn sk_family(&self) -> i32 {
         0
@@ -551,7 +562,10 @@ impl NetlinkSocket for NetlinkSock {
         self
     }
 }
-
+impl NetlinkSocketWithCallback for NetlinkSock {
+    fn sk_data_ready(&self, callback: impl Fn(i32) -> i32) { /* 实现 */
+    }
+}
 impl NetlinkSock {
     pub fn new(_protocol: Option<usize>) -> NetlinkSock {
         let vec_of_vec_u8: Vec<Vec<u8>> = Vec::new();
@@ -691,47 +705,6 @@ impl NetlinkSock {
     pub fn set_protocol(&mut self, protocol: usize) {
         self.protocol = protocol;
     }
-
-    pub fn netlink_has_listeners(&self, group: u32) -> i32 {
-        log::info!("netlink_has_listeners");
-        let mut res = 0;
-        let protocol = self.sk_protocol();
-    
-        // 获取读锁
-        let nl_table = NL_TABLE.read();
-    
-        // 检查 protocol 是否在范围内
-        if protocol >= nl_table.len() {
-            log::error!(
-                "Protocol {} is out of bounds, table's len is {}",
-                protocol,
-                nl_table.len()
-            );
-            return res;
-        }
-    
-        // 获取对应的 NetlinkTable
-        let netlink_table = &nl_table[protocol];
-    
-        // 检查 listeners 是否存在
-        if let Some(listeners) = &netlink_table.listeners {
-            // 检查 group 是否在范围内
-            log::info!("listeners.masks:{:?}", listeners.masks);
-            if group > 0 && (group as usize - 1) < listeners.masks.len() {
-                res = listeners.masks[group as usize - 1] as i32;
-            } else {
-                log::error!(
-                    "Group {} is out of bounds, len is {}",
-                    group,
-                    listeners.masks.len()
-                );
-            }
-        } else {
-            log::error!("Listeners for protocol {} are None", protocol);
-        }
-    
-        res
-    }
 }
 
 #[derive(Clone)]
@@ -763,7 +736,46 @@ lazy_static! {
     /// 一个维护全局的 NetlinkTable 向量，每一个元素代表一个 netlink 协议类型，最大数量为 MAX_LINKS
     pub static ref NL_TABLE: RwLock<Vec<NetlinkTable>> = initialize_netlink_table();
 }
+pub fn netlink_has_listeners(sk: &NetlinkSock, group: u32) -> i32 {
+    log::info!("netlink_has_listeners");
+    let mut res = 0;
+    let protocol = sk.sk_protocol();
 
+    // 获取读锁
+    let nl_table = NL_TABLE.read();
+
+    // 检查 protocol 是否在范围内
+    if protocol >= nl_table.len() {
+        log::error!(
+            "Protocol {} is out of bounds, table's len is {}",
+            protocol,
+            nl_table.len()
+        );
+        return res;
+    }
+
+    // 获取对应的 NetlinkTable
+    let netlink_table = &nl_table[protocol];
+
+    // 检查 listeners 是否存在
+    if let Some(listeners) = &netlink_table.listeners {
+        // 检查 group 是否在范围内
+        log::info!("listeners.masks:{:?}", listeners.masks);
+        if group > 0 && (group as usize - 1) < listeners.masks.len() {
+            res = listeners.masks[group as usize - 1] as i32;
+        } else {
+            log::error!(
+                "Group {} is out of bounds, len is {}",
+                group,
+                listeners.masks.len()
+            );
+        }
+    } else {
+        log::error!("Listeners for protocol {} are None", protocol);
+    }
+
+    res
+}
 struct NetlinkBroadcastData<'a> {
     exclude_sk: &'a Arc<NetlinkSock>,
     portid: u32,
@@ -773,14 +785,14 @@ struct NetlinkBroadcastData<'a> {
     congested: i32,
     delivered: i32,
     allocation: u32,
-    skb: SkBuff,
-    skb_2: SkBuff,
+    skb: Arc<RwLock<SkBuff>>,
+    skb_2: Arc<RwLock<SkBuff>>,
 }
 impl<'a> NetlinkBroadcastData<'a> {
     pub fn copy_skb_to_skb_2(&mut self) {
         log::info!("copy_skb_to_skb_2");
-        let skb = self.skb.clone();
-        self.skb_2 = skb;
+        let skb = self.skb.read().clone();
+        *self.skb_2.write() = skb;
         log::info!("copy_skb_to_skb_2: skb_2: {:?}", self.skb_2);
     }
 }
@@ -804,12 +816,14 @@ fn do_one_broadcast(
         return Err(SystemError::EINVAL);
     }
 
+    // 从Arc<dyn NetlinkSocket>中获取NetlinkSock
     let nlk_guard = sk.lock();
     log::info!("do_one_broadcast: nlk.portid: {}", nlk_guard.portid());
-    log::info!("do_one_broadcast: info.group: {}, nlk_guard.ngroups: {}, nlk_guard.groups: {:?}", info.group, nlk_guard.ngroups(), nlk_guard.groups());
+
     // 如果目的单播地址就是该 netlink 套接字
     // 或者目的组播地址超出了该 netlink 套接字的上限
     // 或者该 netlink 套接字没有阅订这条组播消息，都直接返回
+    log::info!("do_one_broadcast: info.group: {}, nlk_guard.ngroups: {}, nlk_guard.groups: {:?}", info.group, nlk_guard.ngroups(), nlk_guard.groups());
     if nlk_guard.portid() == info.portid
         || info.group > nlk_guard.ngroups()
         || !nlk_guard.groups().contains(&(info.group - 1))
@@ -825,18 +839,17 @@ fn do_one_broadcast(
         return Err(SystemError::EINVAL);
     }
     // 设置 skb2，其内容来自 skb
-    if info.skb_2.inner.is_empty() {
-        if info.skb.skb_shared() {
+    if info.skb_2.read().inner.is_empty() {
+        if skb_shared(&info.skb) {
             info.copy_skb_to_skb_2();
         } else {
-            info.skb_2 = info.skb.clone();
-            info.skb_2.skb_orphan();
+            info.skb_2 = Arc::new(RwLock::new(info.skb.read().clone()));
+            skb_orphan(&info.skb_2);
         }
     }
-    log::info!("do_one_broadcast: info.skb_2.inner: {:?}", info.skb_2.inner);
+    log::info!("do_one_broadcast: info.skb_2.inner: {:?}", info.skb_2.read().inner);
     // 到这里如果 skb2 还是 NULL，意味着上一步中 clone 失败
-    if info.skb_2.inner.is_empty() {
-        log::warn!("do_one_broadcast: skb_2 is empty");
+    if info.skb_2.read().inner.is_empty() {
         netlink_overrun(&sk);
         info.failure = 1;
         if nlk_guard.flags().is_some() & !NetlinkFlags::BROADCAST_SEND_ERROR.bits().is_zero() {
@@ -845,12 +858,12 @@ fn do_one_broadcast(
         return Err(SystemError::EINVAL);
     }
 
-    if info.skb_2.sk_filter(&sk) {
+    if sk_filter(&sk, &info.skb_2) {
         return Err(SystemError::EINVAL);
     }
     log::info!("do_one_broadcast: sk_filter success");
     drop(nlk_guard);
-    let ret = netlink_broadcast_deliver(Arc::clone(&sk), &mut info.skb_2);
+    let ret = netlink_broadcast_deliver(Arc::clone(&sk), &info.skb_2);
     let nlk_guard = sk.lock();
     // 如果将承载了组播消息的 skb 发送到该用户进程 netlink 套接字失败
     if ret.is_err() {
@@ -861,7 +874,7 @@ fn do_one_broadcast(
     } else {
         // info.congested |= -1;
         info.delivered = 1;
-        info.skb_2 = info.skb.clone();
+        info.skb_2 = Arc::new(RwLock::new(info.skb.read().clone()));
     }
 
     drop(nlk_guard);
@@ -882,7 +895,7 @@ fn do_one_broadcast(
 ///
 pub fn netlink_broadcast(
     ssk: &Arc<NetlinkSock>,
-    skb: SkBuff,
+    skb: Arc<RwLock<SkBuff>>,
     portid: u32,
     group: u32,
     allocation: u32,
@@ -898,7 +911,7 @@ pub fn netlink_broadcast(
         delivered: 0,
         allocation,
         skb,
-        skb_2: SkBuff::new(None),
+        skb_2: Arc::new(RwLock::new(SkBuff::new(None))),
     });
 
     // While we sleep in clone, do not allow to change socket list
@@ -909,20 +922,12 @@ pub fn netlink_broadcast(
 
     log::info!("netlink_broadcast: mc_set: {:?}, protocol: {}", mc_set, ssk.sk_protocol());
     log::info!("netlink_broadcast: hash: {:?}", hash);
-    // 遍历 netlink_table 中的所有 netlink 套接字，尝试向每一个套接字发送组播消息
     for portid in &mc_set {
         log::info!("netlink_broadcast: portid: {}", portid);
         if let Some(sk) = hash.get(portid) {
-            match netlink_lookup(ssk.sk_protocol(), *portid) {
-                Some(usk) => {
-                    log::info!("netlink_lookup: usk.portid: {}", usk.lock().portid());
-                    if let Err(e) = do_one_broadcast(Arc::clone(&usk), &mut info) {
-                        log::error!("Failed to broadcast to portid {}: {:?}", portid, e);
-                    }
-                }
-                None => {
-                    log::warn!("No NetlinkSock found for portid: {}", portid);
-                }
+            log::info!("netlink_broadcast: sk.portid: {}", sk.lock().portid());
+            if let Err(e) = do_one_broadcast(Arc::clone(sk), &mut info) {
+                log::error!("Failed to broadcast to portid {}: {:?}", portid, e);
             }
         } else {
             log::warn!("No NetlinkSock found for portid: {}", portid);
@@ -950,7 +955,11 @@ pub fn netlink_broadcast(
     return Err(SystemError::ESRCH);
 }
 
-
+/// 对网络套接字(sk)和网络数据包(skb)进行过滤
+fn sk_filter(sk: &Arc<SpinLock<NetlinkSock>>, skb: &Arc<RwLock<SkBuff>>) -> bool {
+    // todo!()
+    false
+}
 
 // https://code.dragonos.org.cn/xref/linux-6.1.9/net/netlink/af_netlink.c?fi=netlink_has_listeners#1400
 /// 处理Netlink套接字的广播消息传递
@@ -968,7 +977,7 @@ pub fn netlink_broadcast(
 /// ## 备注：
 /// - 到这里，已经确定了传入的 netlink 套接字跟组播消息匹配正确；
 /// - netlink 组播消息不支持阻塞
-fn netlink_broadcast_deliver(sk: Arc<SpinLock<NetlinkSock>>, skb: &mut SkBuff) -> Result<i32, SystemError> {
+fn netlink_broadcast_deliver(sk: Arc<SpinLock<NetlinkSock>>, skb: &Arc<RwLock<SkBuff>>) -> Result<i32, SystemError> {
     log::info!("netlink_broadcast_deliver");
 
     {
@@ -976,7 +985,7 @@ fn netlink_broadcast_deliver(sk: Arc<SpinLock<NetlinkSock>>, skb: &mut SkBuff) -
         // 如果接收缓冲区的已分配内存小于或等于其总大小，并且套接字没有被标记为拥塞，则继续执行内部的代码块。
         if (nlk_guard.sk_rmem_alloc() <= nlk_guard.sk_rcvbuf()) && !(nlk_guard.state == NetlinkState::NETLINK_S_CONGESTED) {
             // 如果满足接收条件，则设置skb的所有者是该netlink套接字
-            skb.netlink_skb_set_owner_r(sk.clone());
+            netlink_skb_set_owner_r(skb, sk.clone());
         } else {
             return Err(SystemError::EINVAL);
         }
@@ -987,7 +996,6 @@ fn netlink_broadcast_deliver(sk: Arc<SpinLock<NetlinkSock>>, skb: &mut SkBuff) -
     log::info!("netlink_send success, sk.data: {:?}", sk.lock().data);
     log::info!("netlink_send success, sk.portid: {:?}", sk.lock().portid());
     log::info!("netlink_send success, sk: {:?}", sk);
-    // 查询展示所有fd及其对应的socket
 
 
     {
@@ -1002,18 +1010,26 @@ fn netlink_broadcast_deliver(sk: Arc<SpinLock<NetlinkSock>>, skb: &mut SkBuff) -
         }
     }
 }
-
+/// 设置一个网络缓冲区skb的所有者为接收方的套接字sk
+fn netlink_skb_set_owner_r(skb: &Arc<RwLock<SkBuff>>, sk: Arc<SpinLock<NetlinkSock>>) {
+    log::info!("netlink_skb_set_owner_r");
+    let mut skb_write = skb.write();
+    skb_write.sk = sk;
+}
 
 // https://code.dragonos.org.cn/xref/linux-6.1.9/net/netlink/af_netlink.c?fi=netlink_has_listeners#1268
-/// 将一个网络缓冲区 skb 中的数据发送到指定的目标进程套接字 sk
-fn netlink_sendskb(sk: Arc<SpinLock<NetlinkSock>>, skb: &SkBuff) -> u32 {
+/// 将一个网络缓冲区 skb 中的数据发送到指定的 目标进程套接字 sk
+fn netlink_sendskb(sk: Arc<SpinLock<NetlinkSock>>, skb: &Arc<RwLock<SkBuff>>) -> u32 {
     log::info!("netlink_sendskb");
 
     // Lock the sk object to modify its data
     let mut sk_guard = sk.lock();
 
+    // Lock the skb object to read its inner data
+    let skb_guard = skb.read();
+
     // Clone the inner data from skb and assign it to sk
-    sk_guard.data = skb.inner.clone();
+    sk_guard.data = skb_guard.inner.clone();
 
     // Return the length of the data as a u32
     sk_guard.data.len() as u32
@@ -1027,7 +1043,7 @@ fn netlink_sendskb(sk: Arc<SpinLock<NetlinkSock>>, skb: &SkBuff) -> u32 {
 /// - nonblock    - 1：非阻塞调用，0：阻塞调用
 fn netlink_unicast(
     ssk: Arc<SpinLock<NetlinkSock>>,
-    mut skb: SkBuff,
+    skb: Arc<RwLock<SkBuff>>,
     portid: u32,
     nonblock: bool,
 ) -> Result<u32, SystemError> {
@@ -1044,15 +1060,16 @@ fn netlink_unicast(
         let sk = sk.unwrap();
 
         if sk.lock().is_kernel() {
-            return Ok(netlink_unicast_kernel(sk, ssk, &mut skb));
+            return Ok(netlink_unicast_kernel(sk, ssk, skb));
         }
 
-        if skb.sk_filter(&sk) {
+        if sk_filter(&sk, &skb) {
+            let err = skb.read().inner.len() as i32;
             drop(skb);
             return Err(SystemError::EINVAL);
         }
 
-        err = netlink_attachskb(sk.clone(), &mut skb, timeo, ssk.clone()).unwrap() as i32;
+        err = netlink_attachskb(sk.clone(), skb.clone(), timeo, ssk.clone()).unwrap() as i32;
         if err == 1 {
             continue; // 重试
         }
@@ -1074,19 +1091,28 @@ fn netlink_unicast(
 fn netlink_unicast_kernel(
     sk: Arc<SpinLock<NetlinkSock>>,
     ssk: Arc<SpinLock<NetlinkSock>>,
-    skb: &mut SkBuff,
+    skb: Arc<RwLock<SkBuff>>,
 ) -> u32 {
+    let mut ret: u32;
     let nlk: Arc<RwLock<NetlinkSock>> = Arc::clone(&sk)
         .arc_any()
         .downcast()
         .map_err(|_| SystemError::EINVAL)
         .expect("Invalid downcast to LockedNetlinkSock");
     let nlk_guard = nlk.read();
-    let ret = skb.inner.len() as u32;
-    skb.netlink_skb_set_owner_r(sk);
-    // todo: netlink_deliver_tap_kernel(sk, ssk, skb);
-    nlk_guard.callback.unwrap().netlink_rcv(skb.clone());
-    // todo：err:ECONNREFUSED
+    // ret = ECONNREFUSED = 111;
+    ret = 111;
+    // 检查内核netlink套接字是否注册了netlink_rcv回调(就是各个协议在创建内核netlink套接字时通常会传入的input函数)
+    if nlk_guard.callback.is_some() {
+        ret = skb.read().inner.len() as u32;
+        netlink_skb_set_owner_r(&skb, sk);
+        // todo: netlink_deliver_tap_kernel(sk, ssk, skb);
+        nlk_guard.callback.unwrap().netlink_rcv(skb.clone());
+        drop(skb);
+    } else {
+        // 如果指定的内核netlink套接字没有注册netlink_rcv回调，就直接丢弃所有收到的netlink消息
+        drop(skb);
+    }
     return ret;
 }
 // https://code.dragonos.org.cn/s?refs=netlink_attachskb&project=linux-6.1.9#
@@ -1102,7 +1128,7 @@ fn netlink_unicast_kernel(
 /// - 1：表示需要重新查找，可能因为等待超时或接收缓冲区不足。
 fn netlink_attachskb(
     sk: Arc<SpinLock<NetlinkSock>>,
-    skb: &mut SkBuff,
+    skb: Arc<RwLock<SkBuff>>,
     mut timeo: i64,
     ssk: Arc<SpinLock<NetlinkSock>>,
 ) -> Result<u64, SystemError> {
@@ -1131,6 +1157,7 @@ fn netlink_attachskb(
             if ssk_option.is_none() || ssk.lock().is_kernel() {
                 netlink_overrun(&sk);
             }
+            drop(skb);
             return Err(SystemError::EAGAIN_OR_EWOULDBLOCK);
         }
         // 程序运行到这里意味着是阻塞调用
@@ -1160,7 +1187,7 @@ fn netlink_attachskb(
         // }
         return Ok(1);
     }
-    skb.netlink_skb_set_owner_r(sk);
+    netlink_skb_set_owner_r(&skb, sk);
     return Ok(0);
 }
 
@@ -1192,7 +1219,7 @@ fn netlink_getsockbyportid(
     }
     return Ok(sock);
 }
-
+// 
 /// 设置 netlink 套接字的选项
 fn netlink_setsockopt(
     nlk: &NetlinkSock,
@@ -1240,6 +1267,11 @@ fn netlink_setsockopt(
         }
         NETLINK_PKTINFO => {
             todo!();
+            //     if val != 0 {
+            //     nlk.flags |= NetlinkFlags::RECV_PKTINFO.bits();
+            //     } else {
+            //     nlk.flags &= !NetlinkFlags::RECV_PKTINFO.bits();
+            //     }
         }
         _ => {
             return Err(SystemError::ENOPROTOOPT);
