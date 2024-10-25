@@ -367,8 +367,8 @@ pub trait NetlinkSocket: Socket + Any {
 // 意义是：netlink_sock（NetlinkSock）是一个sock（NetlinkSocket）, 实现了 Netlinksocket trait 和 Sock trait.
 
 #[derive(Debug, Clone)]
-#[cast_to([sync] Socket)]
-#[cast_to([sync] NetlinkSocket)]
+// #[cast_to([sync] Socket)]
+// #[cast_to([sync] NetlinkSocket)]
 pub struct NetlinkSock {
     portid: u32,
     node: Arc<HListHead>,
@@ -385,7 +385,7 @@ pub struct NetlinkSock {
     dump_done_errno: i32,
     cb_running: bool,
     queue: Vec<Arc<RwLock<SkBuff>>>,
-    data: Vec<Vec<u8>>,
+    data: Arc<Mutex<Vec<Vec<u8>>>>,
     sk_sndtimeo: i64,
     sk_rcvtimeo: i64,
     callback: Option<&'static dyn NetlinkCallback>,
@@ -554,8 +554,7 @@ impl NetlinkSocket for NetlinkSock {
 
 impl NetlinkSock {
     pub fn new(_protocol: Option<usize>) -> NetlinkSock {
-        let vec_of_vec_u8: Vec<Vec<u8>> = Vec::new();
-        let data=  vec_of_vec_u8;
+        let data: Arc<Mutex<Vec<Vec<u8>>>> =  Arc::new(Mutex::new(Vec::new()));
         let sock = NetlinkSock {
             portid: 0,
             node: Arc::new(HListHead { first: None }),
@@ -610,7 +609,7 @@ impl NetlinkSock {
             return Err(SystemError::ENAVAIL);
         }
         // let message_type = NLmsgType::from(header.nlmsg_type);
-        let mut buffer = self.data.clone();
+        let mut buffer = self.data.lock();
         buffer.clear();
 
         let mut msg = Vec::new();
@@ -649,7 +648,7 @@ impl NetlinkSock {
     ) -> Result<(usize, Endpoint), SystemError> {
         log::info!("netlink_recv on : {:?}", self);
         let copied: usize;
-        let mut buffer = self.data.clone();
+        let mut buffer = self.data.lock();
         log::info!("recv from portid:{:?}, buff:{:?}",self.portid,buffer);
         // 检查 buffer 是否为空
         if buffer.is_empty() {
@@ -825,7 +824,7 @@ fn do_one_broadcast(
         return Err(SystemError::EINVAL);
     }
     // 设置 skb2，其内容来自 skb
-    if info.skb_2.inner.is_empty() {
+    if info.skb_2.inner.lock().is_empty() {
         if info.skb.skb_shared() {
             info.copy_skb_to_skb_2();
         } else {
@@ -835,7 +834,7 @@ fn do_one_broadcast(
     }
     log::info!("do_one_broadcast: info.skb_2.inner: {:?}", info.skb_2.inner);
     // 到这里如果 skb2 还是 NULL，意味着上一步中 clone 失败
-    if info.skb_2.inner.is_empty() {
+    if info.skb_2.inner.lock().is_empty() {
         log::warn!("do_one_broadcast: skb_2 is empty");
         netlink_overrun(&sk);
         info.failure = 1;
@@ -1007,17 +1006,44 @@ fn netlink_broadcast_deliver(sk: Arc<SpinLock<NetlinkSock>>, skb: &mut SkBuff) -
 // https://code.dragonos.org.cn/xref/linux-6.1.9/net/netlink/af_netlink.c?fi=netlink_has_listeners#1268
 /// 将一个网络缓冲区 skb 中的数据发送到指定的目标进程套接字 sk
 fn netlink_sendskb(sk: Arc<SpinLock<NetlinkSock>>, skb: &SkBuff) -> u32 {
-    log::info!("netlink_sendskb");
-
-    // Lock the sk object to modify its data
+    // Lock the `sk` to prepare data
     let mut sk_guard = sk.lock();
 
-    // Clone the inner data from skb and assign it to sk
-    sk_guard.data = skb.inner.clone();
+    // Lock `inner` and flatten its contents into a single message buffer
+    let mut combined_message = Vec::new();
+    {
+        let inner_data = skb.inner.lock();
+        for segment in inner_data.iter() {
+            combined_message.extend_from_slice(segment);
+        }
+    }
 
-    // Return the length of the data as a u32
-    sk_guard.data.len() as u32
+    // Optionally, align the combined message to 4 bytes if required by Netlink protocol
+    while combined_message.len() % 4 != 0 {
+        combined_message.push(0);
+    }
+
+    // Create a new Netlink header
+    let new_header = NLmsghdr {
+        nlmsg_len: (combined_message.len() + mem::size_of::<NLmsghdr>()),
+        nlmsg_type: NLmsgType::NLMSG_DONE,
+        nlmsg_flags: NLmsgFlags::NLM_F_MULTI,
+        nlmsg_seq: 1, // Example sequence number
+        nlmsg_pid: 0, // Example PID, set appropriately
+    };
+
+    // Serialize header and message into the final buffer
+    let mut final_msg = Vec::new();
+    final_msg.push_ext(new_header);  // Add header
+    final_msg.extend(combined_message);  // Add the flattened message content
+
+    // Update sk_guard.data to contain the final message
+    sk_guard.data = Arc::new(Mutex::new(vec![final_msg.clone()]));
+    log::info!("Data in sk after modification: {:?}", sk_guard.data.lock());
+
+    final_msg.len() as u32 // Return the length of the final message
 }
+
 // https://code.dragonos.org.cn/xref/linux-6.1.9/net/netlink/af_netlink.c#1337
 /// 内核执行 netlink 单播消息
 /// ## 参数
@@ -1044,7 +1070,7 @@ fn netlink_unicast(
         let sk = sk.unwrap();
 
         if sk.lock().is_kernel() {
-            return Ok(netlink_unicast_kernel(sk, ssk, &mut skb));
+            return netlink_unicast_kernel(sk, ssk, &mut skb);
         }
 
         if skb.sk_filter(&sk) {
@@ -1075,19 +1101,18 @@ fn netlink_unicast_kernel(
     sk: Arc<SpinLock<NetlinkSock>>,
     ssk: Arc<SpinLock<NetlinkSock>>,
     skb: &mut SkBuff,
-) -> u32 {
+) -> Result<u32, SystemError> {
     let nlk: Arc<RwLock<NetlinkSock>> = Arc::clone(&sk)
         .arc_any()
         .downcast()
         .map_err(|_| SystemError::EINVAL)
         .expect("Invalid downcast to LockedNetlinkSock");
     let nlk_guard = nlk.read();
-    let ret = skb.inner.len() as u32;
     skb.netlink_skb_set_owner_r(sk);
     // todo: netlink_deliver_tap_kernel(sk, ssk, skb);
     nlk_guard.callback.unwrap().netlink_rcv(skb.clone());
     // todo：err:ECONNREFUSED
-    return ret;
+    return Ok(0);
 }
 // https://code.dragonos.org.cn/s?refs=netlink_attachskb&project=linux-6.1.9#
 /// 将一个指定skb绑定到一个指定的属于用户进程的netlink套接字上

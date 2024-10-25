@@ -1,18 +1,18 @@
 use super::af_netlink::NetlinkSock;
-use crate::libs::{ rwlock::RwLock, spinlock::SpinLock};
+use crate::libs::{ mutex::Mutex, rwlock::RwLock, spinlock::SpinLock};
 use alloc::{sync::Arc, vec::Vec};
 const SKB_SIZE: usize = 4096; // 定义 SKB 的大小
 #[derive(Debug, Clone)]
 pub struct SkBuff {
     // skb的所有者
     pub sk: Arc<SpinLock<NetlinkSock>>,
-    pub inner: Vec<Vec<u8>>
+    pub inner: Arc<Mutex<Vec<Vec<u8>>>>,
 }
 impl SkBuff {
     pub fn new(protocol: Option<usize>) -> Self {
         SkBuff {
             sk: Arc::new(SpinLock::new(NetlinkSock::new(protocol))),
-            inner: Vec::new()
+            inner: Arc::new(Mutex::new(Vec::with_capacity(SKB_SIZE))),
         }
     }
     /// 设置一个网络缓冲区skb的所有者为接收方的套接字sk

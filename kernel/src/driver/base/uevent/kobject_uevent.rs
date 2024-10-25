@@ -283,13 +283,15 @@ pub fn alloc_uevent_skb<'a>(
     let len = action_string.len() + devpath.len() + 2;
     let total_len = len + env.buflen;
     // 分配一个新的 skb
-    let mut skb = SkBuff {
+    let skb = SkBuff {
         sk: Arc::new(SpinLock::new(NetlinkSock::new(None))),
-        inner: Vec::with_capacity(total_len)
+        inner: Arc::new(Mutex::new(Vec::with_capacity(total_len))),
     };
-    // 将 action_string 和 devpath 添加到 skb 中
-    skb.inner.push(format!("{}@{}", action_string, devpath).into_bytes());
-    skb.inner.push(env.buf.clone());
+    {
+        let mut inner = skb.inner.lock();
+        inner.push(format!("{}@{}", action_string, devpath).into_bytes());
+        inner.push(env.buf.clone());
+    }
 
     log::info!("alloc_uevent_skb: action_string: {}, devpath: {}", action_string, devpath);
     skb
