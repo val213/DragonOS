@@ -1,27 +1,27 @@
 use super::af_netlink::NetlinkSock;
-use crate::libs::{ mutex::Mutex, rwlock::RwLock, spinlock::SpinLock};
+use crate::libs::mutex::Mutex;
 use alloc::{sync::Arc, vec::Vec};
 const SKB_SIZE: usize = 4096; // 定义 SKB 的大小
 #[derive(Debug, Clone)]
 pub struct SkBuff {
     // skb的所有者
-    pub sk: Arc<SpinLock<NetlinkSock>>,
+    pub sk: Arc<NetlinkSock>,
     pub inner: Arc<Mutex<Vec<Vec<u8>>>>,
 }
 impl SkBuff {
     pub fn new(protocol: Option<usize>) -> Self {
         SkBuff {
-            sk: Arc::new(SpinLock::new(NetlinkSock::new(protocol))),
+            sk: Arc::new(NetlinkSock::new(protocol)),
             inner: Arc::new(Mutex::new(Vec::with_capacity(SKB_SIZE))),
         }
     }
     /// 设置一个网络缓冲区skb的所有者为接收方的套接字sk
-    pub fn netlink_skb_set_owner_r(&mut self, sk: Arc<SpinLock<NetlinkSock>>) {
+    pub fn netlink_skb_set_owner_r(&mut self, sk: Arc<NetlinkSock>) {
         log::info!("netlink_skb_set_owner_r");
         self.sk = sk;
     }
     /// 对网络套接字(sk)和网络数据包(skb)进行过滤
-    pub fn sk_filter(&self, sk: &Arc<SpinLock<NetlinkSock>>) -> bool {
+    pub fn sk_filter(&self, _sk: &NetlinkSock) -> bool {
         // todo!()
         false
     }
@@ -47,8 +47,7 @@ impl SkBuff {
     fn skb_try_recv_from_queue() {}
 }
 
-
 // 处理网络套接字的缓冲区溢出
-pub fn netlink_overrun(sk: &Arc<SpinLock<NetlinkSock>>) {
+pub fn netlink_overrun(sk: &NetlinkSock) {
     // todo!()
 }

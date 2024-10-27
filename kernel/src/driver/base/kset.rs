@@ -1,4 +1,5 @@
 use alloc::{
+    fmt::Debug,
     string::String,
     sync::{Arc, Weak},
     vec::Vec,
@@ -239,8 +240,7 @@ impl InnerKSet {
         }
     }
 }
-//https://code.dragonos.org.cn/xref/linux-6.1.9/include/linux/kobject.h#137
-use core::fmt::Debug;
+// https://code.dragonos.org.cn/xref/linux-6.1.9/include/linux/kobject.h#137
 pub trait KSetUeventOps: Debug + Send + Sync {
     fn filter(&self) -> Option<i32>;
     fn uevent_name(&self) -> String;
@@ -251,6 +251,7 @@ pub struct KSetUeventOpsDefault;
 
 impl KSetUeventOps for KSetUeventOpsDefault {
     fn filter(&self) -> Option<i32> {
+        // todo!()
         Some(0)
     }
 
@@ -259,6 +260,7 @@ impl KSetUeventOps for KSetUeventOpsDefault {
     }
 
     fn uevent(&self, env: &KobjUeventEnv) -> i32 {
+        let _ = env;
         todo!()
     }
 }

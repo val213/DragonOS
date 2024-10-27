@@ -6,33 +6,26 @@ use super::{UEVENT_BUFFER_SIZE, UEVENT_NUM_ENVP};
 use crate::driver::base::kobject::{KObjectManager, KObjectState};
 use crate::init::initcall::INITCALL_POSTCORE;
 use crate::libs::mutex::Mutex;
-use crate::libs::rwlock::RwLock;
-use crate::libs::spinlock::SpinLock;
 use crate::net::socket::netlink::af_netlink::{netlink_broadcast, NetlinkSock};
+use crate::net::socket::netlink::netlink_proto::netlink_protocol::KOBJECT_UEVENT;
 use crate::net::socket::netlink::skbuff::SkBuff;
-use crate::net::socket::netlink::{
-    netlink_kernel_create, NetlinkKernelCfg, NETLINK_KOBJECT_UEVENT, NL_CFG_F_NONROOT_RECV,
-};
+use crate::net::socket::netlink::{netlink_kernel_create, NetlinkKernelCfg, NL_CFG_F_NONROOT_RECV};
 use alloc::boxed::Box;
 use alloc::collections::LinkedList;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::fmt::Write;
 use num::Zero;
 use system_error::SystemError;
 use unified_init::macros::unified_init;
 // 全局变量
 pub static UEVENT_SEQNUM: u64 = 0;
-// #ifdef CONFIG_UEVENT_HELPER
-// char uevent_helper[UEVENT_HELPER_PATH_LEN] = CONFIG_UEVENT_HELPER_PATH;
-// #endif
 
 struct UeventSock {
-    inner: NetlinkSock,
+    inner: Arc<NetlinkSock>,
 }
 impl UeventSock {
-    pub fn new(inner: NetlinkSock) -> Self {
+    pub fn new(inner: Arc<NetlinkSock>) -> Self {
         UeventSock { inner }
     }
 }
@@ -61,14 +54,13 @@ fn uevent_net_init() -> Result<(), SystemError> {
         ..Default::default()
     };
     // 为 NETLINK_KOBJECT_UEVENT 协议创建一个内核 netlink socket
-    let ue_sk = UeventSock::new(netlink_kernel_create(NETLINK_KOBJECT_UEVENT, Some(cfg)).unwrap());
+    let ue_sk = UeventSock::new(netlink_kernel_create(KOBJECT_UEVENT, Some(cfg)).unwrap());
 
     // 每个 net namespace 向链表中添加一个新的 uevent socket
     UEVENT_SOCK_LIST.lock().push_back(ue_sk);
     log::info!("uevent_net_init finish");
     return Ok(());
 }
-
 
 /// kobject_uevent，和kobject_uevent_env功能一样，只是没有指定任何的环境变量
 pub fn kobject_uevent(kobj: Arc<dyn KObject>, action: KobjectAction) -> Result<(), SystemError> {
@@ -196,7 +188,7 @@ pub fn kobject_uevent_env(
         log::info!("add_uevent_var failed DEVPATH");
         return Ok(retval);
     };
-    retval = env.add_uevent_var( "SUBSYSTEM=%s", &subsystem).unwrap();
+    retval = env.add_uevent_var("SUBSYSTEM=%s", &subsystem).unwrap();
     if !retval.is_zero() {
         drop(devpath);
         drop(env);
@@ -207,7 +199,7 @@ pub fn kobject_uevent_env(
     /* keys passed in from the caller */
 
     for var in envp_ext {
-        let retval = env.add_uevent_var( "%s", &var).unwrap();
+        let retval = env.add_uevent_var("%s", &var).unwrap();
         if !retval.is_zero() {
             drop(devpath);
             drop(env);
@@ -240,7 +232,9 @@ pub fn kobject_uevent_env(
     }
 
     /* we will send an event, so request a new sequence number */
-    retval = KobjUeventEnv::add_uevent_var(&mut env, "SEQNUM=%llu", &(UEVENT_SEQNUM + 1).to_string()).unwrap();
+    retval =
+        KobjUeventEnv::add_uevent_var(&mut env, "SEQNUM=%llu", &(UEVENT_SEQNUM + 1).to_string())
+            .unwrap();
     if !retval.is_zero() {
         drop(devpath);
         drop(env);
@@ -254,10 +248,6 @@ pub fn kobject_uevent_env(
     log::info!("kobject_uevent_env: retval: {}", retval);
     return Ok(retval);
 }
-
-
-
-
 
 // 用于处理网络相关的uevent（通用事件）广播
 // https://code.dragonos.org.cn/xref/linux-6.1.9/lib/kobject_uevent.c#381
@@ -282,18 +272,24 @@ pub fn alloc_uevent_skb<'a>(
 ) -> SkBuff {
     let len = action_string.len() + devpath.len() + 2;
     let total_len = len + env.buflen;
+    log::info!("alloc_uevent_skb: total_len: {}, len: {}", total_len, len);
     // 分配一个新的 skb
     let skb = SkBuff {
-        sk: Arc::new(SpinLock::new(NetlinkSock::new(None))),
+        sk: Arc::new(NetlinkSock::new(None)),
         inner: Arc::new(Mutex::new(Vec::with_capacity(total_len))),
     };
+    log::info!("alloc_uevent_skb: skb: {:?}", skb);
     {
         let mut inner = skb.inner.lock();
         inner.push(format!("{}@{}", action_string, devpath).into_bytes());
         inner.push(env.buf.clone());
     }
-
-    log::info!("alloc_uevent_skb: action_string: {}, devpath: {}", action_string, devpath);
+    log::info!("alloc_uevent_skb: skb.inner: {:?}", skb.inner);
+    log::info!(
+        "alloc_uevent_skb: action_string: {}, devpath: {}",
+        action_string,
+        devpath
+    );
     skb
 }
 // https://code.dragonos.org.cn/xref/linux-6.1.9/lib/kobject_uevent.c#309
@@ -321,10 +317,10 @@ pub fn uevent_net_broadcast_untagged(
         // 分配一个新的 skb
         let skb = alloc_uevent_skb(env, action_string, devpath);
         log::info!("next is netlink_broadcast");
-        let netlink_socket = Arc::new(ue_sk.inner.clone());
+        let netlink_socket = Arc::clone(&ue_sk.inner);
         // portid = 0: 表示消息发送给内核或所有监听的进程，而不是特定的用户空间进程。
         // group = 1: 表示消息发送给 netlink 多播组 ID 为 1 的组。在 netlink 广播中，组 ID 1 通常用于 uevent 消息。
-        retval = match netlink_broadcast(&netlink_socket, skb, 0, 1, 1) {
+        retval = match netlink_broadcast(&netlink_socket, skb, 0, 1) {
             Ok(_) => 0,
             Err(err) => err.to_posix_errno(),
         };

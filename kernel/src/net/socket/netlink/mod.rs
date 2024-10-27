@@ -1,61 +1,22 @@
 pub mod af_netlink;
-pub mod callback;
 pub mod endpoint;
 pub mod netlink_proto;
 pub mod skbuff;
-pub mod sock;
-
-use super::{family, inet::datagram, Inode, Socket, Type};
-use crate::driver::base::uevent::KobjUeventEnv;
-use crate::libs::spinlock::SpinLock;
+use super::{family, Inode, Socket, Type};
+use af_netlink::{netlink_insert, Listeners, NetlinkFlags, NetlinkSock, NL_TABLE};
 use alloc::sync::Arc;
-use alloc::{boxed::Box, slice, vec::Vec};
+use alloc::{slice, vec::Vec};
+use netlink_proto::netlink_protocol::KOBJECT_UEVENT;
 use system_error::SystemError;
-
-// https://code.dragonos.org.cn/xref/linux-6.1.9/net/netlink/
-
-use crate::libs::mutex::Mutex;
-use core::mem;
-
-use af_netlink::{netlink_insert, Listeners, NetlinkFlags, NetlinkSock, NetlinkSocket, NL_TABLE};
 // 监听事件类型
 pub const NETLINK_ADD_MEMBERSHIP: usize = 1;
 pub const NETLINK_DROP_MEMBERSHIP: usize = 2;
 pub const NETLINK_PKTINFO: usize = 3; // 接收包信息。如果设置了这个选项，套接字将接收包含发送者信息（如发送者的端口号和地址）的消息
-                                      // Netlink protocol family
-pub const NETLINK_ROUTE: usize = 0;
-pub const NETLINK_UNUSED: usize = 1;
-pub const NETLINK_USERSOCK: usize = 2;
-pub const NETLINK_FIREWALL: usize = 3;
-pub const NETLINK_SOCK_DIAG: usize = 4;
-pub const NETLINK_NFLOG: usize = 5;
-pub const NETLINK_XFRM: usize = 6;
-pub const NETLINK_SELINUX: usize = 7;
-pub const NETLINK_ISCSI: usize = 8;
-pub const NETLINK_AUDIT: usize = 9;
-pub const NETLINK_FIB_LOOKUP: usize = 10;
-pub const NETLINK_CONNECTOR: usize = 11;
-pub const NETLINK_NETFILTER: usize = 12;
-pub const NETLINK_IP6_FW: usize = 13;
-pub const NETLINK_DNRTMSG: usize = 14;
-// implemente uevent needed
-pub const NETLINK_KOBJECT_UEVENT: usize = 15;
-pub const NETLINK_GENERIC: usize = 16;
-// pub const NETLINK_DM : usize = 17; // Assuming DM Events is unused, not defined
-pub const NETLINK_SCSITRANSPORT: usize = 18;
-pub const NETLINK_ECRYPTFS: usize = 19;
-pub const NETLINK_RDMA: usize = 20;
-pub const NETLINK_CRYPTO: usize = 21;
-pub const NETLINK_SMC: usize = 22;
-
-//pub const NETLINK_INET_DIAG = NETLINK_SOCK_DIAG;
-pub const NETLINK_INET_DIAG: usize = 4;
-
+                                      // 内核netlink套接字的最大数量
 pub const MAX_LINKS: usize = 32;
-
+// 允许非特权用户接收/发送消息
 pub const NL_CFG_F_NONROOT_RECV: u32 = 1 << 0;
 pub const NL_CFG_F_NONROOT_SEND: u32 = 1 << 1;
-
 bitflags! {
 /// 四种通用的消息类型 nlmsg_type
 pub struct NLmsgType: u8 {
@@ -69,12 +30,7 @@ pub struct NLmsgType: u8 {
     const NLMSG_OVERRUN = 0x4;
 }
 
-//消息标记 nlmsg_flags
-//  const NLM_F_REQUEST = 1; /* It is request message.     */
-//  const NLM_F_MULTI = 2; /* Multipart message, terminated by NLMSG_DONE */
-//  const NLM_F_ACK = 4; /* Reply with ack, with zero or error code */
-//  const NLM_F_ECHO = 8; /* Echo this request         */
-//  const NLM_F_DUMP_INTR = 16; /* Dump was inconsistent due to sequence change */
+//消息标记
 pub struct NLmsgFlags: u16 {
     /* Flags values */
     const NLM_F_REQUEST = 0x01;
@@ -105,17 +61,9 @@ pub struct NLmsgFlags: u16 {
     const NLM_F_ACK_TLVS = 0x200;	/* extended ACK TVLs were included */
 }
 }
-// 定义Netlink消息的结构体，如NLmsghdr和geNLmsghdr(拓展的netlink消息头)，以及用于封包和解包消息的函数。
+
 // 参考 https://code.dragonos.org.cn/xref/linux-6.1.9/include/linux/netlink.h
-/// netlink消息报头
-/**
- * struct NLmsghdr - fixed format metadata header of Netlink messages
- * @nlmsg_len:   Length of message including header
- * @nlmsg_type:  Message content type
- * @nlmsg_flags: Additional flags
- * @nlmsg_seq:   Sequence number
- * @nlmsg_pid:   Sending process port ID
- */
+#[allow(dead_code)]
 pub struct NLmsghdr {
     pub nlmsg_len: usize,
     pub nlmsg_type: NLmsgType,
@@ -126,51 +74,19 @@ pub struct NLmsghdr {
 
 const NLMSG_ALIGNTO: usize = 4;
 #[derive(Debug, PartialEq, Copy, Clone)]
+#[allow(dead_code)]
 pub enum NetlinkState {
-    NetlinkUnconnected = 0,
-    NetlinkConnected,
-    NETLINK_S_CONGESTED = 2,
+    Unconnected = 0,
+    Connected = 1,
+    SCongested = 2,
 }
 
-fn nlmsg_align(len: usize) -> usize {
-    (len + NLMSG_ALIGNTO - 1) & !(NLMSG_ALIGNTO - 1)
-}
-
-fn nlmsg_hdrlen() -> usize {
-    nlmsg_align(mem::size_of::<NLmsghdr>())
-}
-
-fn nlmsg_length(len: usize) -> usize {
-    len + nlmsg_hdrlen()
-}
-
-fn nlmsg_space(len: usize) -> usize {
-    nlmsg_align(nlmsg_length(len))
-}
-
-unsafe fn nlmsg_data(nlh: &NLmsghdr) -> *mut u8 {
-    ((nlh as *const NLmsghdr) as *mut u8).add(nlmsg_length(0))
-}
-
-unsafe fn nlmsg_next(nlh: *mut NLmsghdr, len: usize) -> *mut NLmsghdr {
-    let nlmsg_len = (*nlh).nlmsg_len;
-    let new_len = len - nlmsg_align(nlmsg_len);
-    nlh.add(nlmsg_align(nlmsg_len))
-}
-
-fn nlmsg_ok(nlh: &NLmsghdr, len: usize) -> bool {
-    len >= nlmsg_hdrlen() && nlh.nlmsg_len >= nlmsg_hdrlen() && nlh.nlmsg_len <= len
-}
-
-fn nlmsg_payload(nlh: &NLmsghdr, len: usize) -> usize {
-    nlh.nlmsg_len - nlmsg_space(len)
-}
 // 定义类型别名来简化闭包类型的定义
 type InputCallback = Arc<dyn FnMut() + Send + Sync>;
 type BindCallback = Arc<dyn Fn(i32) -> i32 + Send + Sync>;
 type UnbindCallback = Arc<dyn Fn(i32) -> i32 + Send + Sync>;
 type CompareCallback = Arc<dyn Fn(&NetlinkSock) -> bool + Send + Sync>;
-/// 该结构包含了内核netlink的可选参数:
+/// 该结构包含了内核 netlink 的可选参数:
 #[derive(Default)]
 pub struct NetlinkKernelCfg {
     pub groups: u32,
@@ -221,22 +137,16 @@ impl NetlinkKernelCfg {
         self.compare = Some(Arc::new(callback));
     }
 }
-// https://code.dragonos.org.cn/xref/linux-6.1.9/include/linux/netlink.h#229
-// netlink属性头
-struct NLattr {
-    nla_len: u16,
-    nla_type: u16,
-}
 
 pub trait VecExt {
-    fn align4(&mut self);
+    fn align(&mut self);
     fn push_ext<T: Sized>(&mut self, data: T);
     fn set_ext<T: Sized>(&mut self, offset: usize, data: T);
 }
 
 impl VecExt for Vec<u8> {
-    fn align4(&mut self) {
-        let len = (self.len() + 3) & !3;
+    fn align(&mut self) {
+        let len = (self.len() + NLMSG_ALIGNTO - 1) & !(NLMSG_ALIGNTO - 1);
         if len > self.len() {
             self.resize(len, 0);
         }
@@ -266,14 +176,13 @@ impl VecExt for Vec<u8> {
 pub fn netlink_kernel_create(
     unit: usize,
     cfg: Option<NetlinkKernelCfg>,
-) -> Result<NetlinkSock, SystemError> {
-    let mut nlk: NetlinkSock = NetlinkSock::new(Some(unit));
-    let sk: Arc<SpinLock<NetlinkSock>> = Arc::new(SpinLock::new(nlk.clone()));
+) -> Result<Arc<NetlinkSock>, SystemError> {
+    let nlk: Arc<NetlinkSock> = Arc::new(NetlinkSock::new(Some(unit)));
     let groups: u32;
     if unit >= MAX_LINKS {
         return Err(SystemError::EINVAL);
     }
-    __netlink_create(&mut nlk, unit, 1).expect("__netlink_create failed");
+    __netlink_create(Arc::clone(&nlk), unit, 1).expect("__netlink_create failed");
 
     if let Some(cfg) = cfg.as_ref() {
         if cfg.groups < 32 {
@@ -290,10 +199,10 @@ pub fn netlink_kernel_create(
     // if cfg.is_some() && cfg.unwrap().input.is_some(){
     //     nlk.netlink_rcv = cfg.unwrap().input;
     // }
-    
+
     // 插入内核套接字
-    netlink_insert(sk, 0).expect("netlink_insert failed");
-    nlk.flags |= NetlinkFlags::NETLINK_F_KERNEL_SOCKET.bits();
+    netlink_insert(Arc::clone(&nlk), 0).expect("netlink_insert failed");
+    nlk.inner.lock().flags |= NetlinkFlags::NETLINK_F_KERNEL_SOCKET.bits();
 
     let mut nl_table = NL_TABLE.write();
     if nl_table[unit].get_registered() == 0 {
@@ -315,23 +224,19 @@ pub fn netlink_kernel_create(
     return Ok(nlk);
 }
 
-fn __netlink_create(nlk: &mut NetlinkSock, unit: usize, kern: usize) -> Result<i32, SystemError> {
-    // 初始化配置参数
-    nlk.flags = kern as u32;
-    nlk.set_protocol(unit);
-    return Ok(0);
-}
-
-pub fn sk_data_ready(nlk: Arc<SpinLock<NetlinkSock>>) -> Result<(), SystemError> {
-    // 唤醒
-    return Ok(());
+fn __netlink_create(nlk: Arc<NetlinkSock>, unit: usize, kern: usize) -> Result<i32, SystemError> {
+    // 获取锁并修改配置参数
+    let mut nlk_guard = nlk.inner.lock();
+    nlk_guard.flags = kern as u32;
+    nlk_guard.protocol = unit;
+    Ok(0)
 }
 
 pub struct Netlink;
 
 impl family::Family for Netlink {
     /// 用户空间创建一个新的套接字的入口
-    fn socket(stype: Type, _protocol: u32) -> Result<Arc<Inode>, SystemError> {
+    fn socket(_stype: Type, _protocol: u32) -> Result<Arc<Inode>, SystemError> {
         let socket = create_netlink_socket(_protocol as usize)?;
         log::debug!("create netlink socket: {:?}", socket);
         Ok(Inode::new(socket))
@@ -340,7 +245,40 @@ impl family::Family for Netlink {
 /// 用户空间创建一个新的Netlink套接字
 fn create_netlink_socket(_protocol: usize) -> Result<Arc<dyn Socket>, SystemError> {
     match _protocol {
-        NETLINK_KOBJECT_UEVENT => Ok(Arc::new(af_netlink::NetlinkSock::new(Some(_protocol)))),
+        KOBJECT_UEVENT => Ok(Arc::new(af_netlink::NetlinkSock::new(Some(_protocol)))),
         _ => Err(SystemError::EPROTONOSUPPORT),
     }
+}
+#[allow(dead_code)]
+pub enum SockFlags {
+    Dead,
+    Done,
+    Urginline,
+    Keepopen,
+    Linger,
+    Destroy,
+    Broadcast,
+    Timestamp,
+    Zapped,
+    UseWriteQueue,          // whether to call sk->sk_write_space in _wfree
+    Dbg,                    // %SO_DEBUG setting
+    Rcvtstamp,              // %SO_TIMESTAMP setting
+    Rcvtstampns,            // %SO_TIMESTAMPNS setting
+    Localroute,             // route locally only, %SO_DONTROUTE setting
+    Memalloc,               // VM depends on this et for swapping
+    TimestampingRxSoftware, // %SOF_TIMESTAMPING_RX_SOFTWARE
+    Fasync,                 // fasync() active
+    RxqOvfl,
+    Zerocopy,   // buffers from userspace
+    WifiStatus, // push wifi status to userspace
+    Nofcs,      // Tell NIC not to do the Ethernet FCS.
+    // Will use last 4 bytes of packet sent from
+    // user-space instead.
+    FilterLocked,   // Filter cannot be changed anymore
+    SelectErrQueue, // Wake select on error queue
+    RcuFree,        // wait rcu grace period in sk_destruct()
+    Txtime,
+    Xdp,       // XDP is attached
+    TstampNew, // Indicates 64 bit timestamps always
+    Rcvmark,   // Receive SO_MARK ancillary data with packet
 }

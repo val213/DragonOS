@@ -158,11 +158,11 @@ fn main() {
     trigger_device_uevent("eth0").expect("Failed to trigger device uevent");
     println!("Device uevent triggered");
 
-    // let message = receive_uevent(socket).expect("Failed to receive uevent message");
-
-    send_uevent(socket, "add@/devices/virtual/block/loop0").expect("Failed to send uevent message");
-    println!("Custom uevent message sent successfully");
     let message = receive_uevent(socket).expect("Failed to receive uevent message");
+
+    // send_uevent(socket, "add@/devices/virtual/block/loop0").expect("Failed to send uevent message");
+    // println!("Custom uevent message sent successfully");
+    // let message = receive_uevent(socket).expect("Failed to receive uevent message");
     
     println!("Received uevent message: {}", message);
 }

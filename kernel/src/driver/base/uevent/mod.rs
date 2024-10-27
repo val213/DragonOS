@@ -42,7 +42,7 @@ pub enum KobjectAction {
 
 /// 解析一个字符串，以确定它代表的是哪个 kobject_action，并提取出随后的参数（如果有的话）
 fn kobject_action_type(buf: &[u8]) -> Result<(KobjectAction, Vec<String>), SystemError> {
-    let mut action = KobjectAction::KOBJCHANGE;
+    let action: KobjectAction;
     let mut action_args: Vec<String> = Vec::new();
     let mut count = buf.len();
     if count != 0 && (buf[count - 1] == b'\n' || buf[count - 1] == b'\0') {
@@ -56,7 +56,7 @@ fn kobject_action_type(buf: &[u8]) -> Result<(KobjectAction, Vec<String>), Syste
     let count_first = arg_start;
     let args_start = arg_start + 1;
 
-    // 匹配KobjectAction
+    // 匹配 KobjectAction
     match &buf[..count_first] {
         b"add" => action = KobjectAction::KOBJADD,
         b"remove" => action = KobjectAction::KOBJREMOVE,
@@ -80,9 +80,8 @@ fn kobject_action_type(buf: &[u8]) -> Result<(KobjectAction, Vec<String>), Syste
     Ok((action, action_args))
 }
 
-pub const UEVENT_NUM_ENVP: usize = 64;
-pub const UEVENT_BUFFER_SIZE: usize = 2048;
-pub const UEVENT_HELPER_PATH_LEN: usize = 256;
+pub const UEVENT_NUM_ENVP: usize = 32;
+pub const UEVENT_BUFFER_SIZE: usize = 32;
 
 /// 表示处理内核对象 uevents 的环境
 /// - envp，指针数组，用于保存每个环境变量的地址，最多可支持的环境变量数量为UEVENT_NUM_ENVP。
@@ -91,6 +90,7 @@ pub const UEVENT_HELPER_PATH_LEN: usize = 256;
 /// - buflen，访问buf的变量。
 // https://code.dragonos.org.cn/xref/linux-6.1.9/include/linux/kobject.h#31
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct KobjUeventEnv {
     argv: Vec<String>,
     envp: Vec<String>,
@@ -105,7 +105,9 @@ impl KobjUeventEnv {
         const MODALIAS_PREFIX: &str = "MODALIAS=";
 
         // 计算要移除的环境变量的总长度
-        let total_len: usize = self.envp.iter()
+        let total_len: usize = self
+            .envp
+            .iter()
             .filter(|&var| var.starts_with(MODALIAS_PREFIX))
             .map(|var| var.len() + 1)
             .sum();
@@ -119,11 +121,7 @@ impl KobjUeventEnv {
     }
 
     /// 以格式化字符的形式，将环境变量copy到env指针中。
-    pub fn add_uevent_var(
-        &mut self,
-        format: &str,
-        args: &str,
-    ) -> Result<i32, SystemError> {
+    pub fn add_uevent_var(&mut self, format: &str, args: &str) -> Result<i32, SystemError> {
         log::info!("add_uevent_var: format: {}, args: {}", format, args);
         if self.envp_idx >= self.envp.capacity() {
             log::info!("add_uevent_var: too many keys");
@@ -147,7 +145,7 @@ impl KobjUeventEnv {
         // Add the string to envp
         self.envp.push(buffer);
         self.envp_idx += 1;
-
+        log::info!("add_uevent_var: envp: {:?}", self.envp);
         Ok(0)
     }
 }
