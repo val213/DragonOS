@@ -12,11 +12,10 @@ use system_error::SystemError;
 pub const NETLINK_ADD_MEMBERSHIP: usize = 1;
 pub const NETLINK_DROP_MEMBERSHIP: usize = 2;
 pub const NETLINK_PKTINFO: usize = 3; // 接收包信息。如果设置了这个选项，套接字将接收包含发送者信息（如发送者的端口号和地址）的消息
-                                      // 内核netlink套接字的最大数量
-pub const MAX_LINKS: usize = 32;
+pub const MAX_LINKS: usize = 32; // 内核netlink套接字的最大数量
 // 允许非特权用户接收/发送消息
 pub const NL_CFG_F_NONROOT_RECV: u32 = 1 << 0;
-pub const NL_CFG_F_NONROOT_SEND: u32 = 1 << 1;
+
 bitflags! {
 /// 四种通用的消息类型 nlmsg_type
 pub struct NLmsgType: u8 {

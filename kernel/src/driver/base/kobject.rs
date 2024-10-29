@@ -1,5 +1,5 @@
 use core::{any::Any, fmt::Debug, hash::Hash, ops::Deref};
-
+use alloc::string::ToString;
 use alloc::{
     string::String,
     sync::{Arc, Weak},
@@ -21,7 +21,7 @@ use crate::{
 
 use system_error::SystemError;
 
-use super::kset::KSet;
+use super::{kset::KSet, uevent::{kobject_uevent::kobject_uevent, KobjectAction}};
 
 pub trait KObject: Any + Send + Sync + Debug + CastFromSync {
     fn as_any_ref(&self) -> &dyn core::any::Any;
@@ -249,8 +249,7 @@ impl KObjectManager {
             }
         }
 
-        // todo: 发送uevent: KOBJ_REMOVE
-        // kobject_uevent();
+        let _ = kobject_uevent(kobj.clone(), KobjectAction::KOBJREMOVE);
         sysfs_instance().remove_dir(&kobj);
         kobj.update_kobj_state(None, Some(KObjectState::IN_SYSFS));
         let kset = kobj.kset();
@@ -262,15 +261,18 @@ impl KObjectManager {
 
     fn get_kobj_path_length(kobj: &Arc<dyn KObject>) -> usize {
         log::info!("get_kobj_path_length() kobj:{:?}", kobj.name());
-        let mut parent = kobj.parent().unwrap().upgrade().unwrap();
-        /* walk up the ancestors until we hit the one pointing to the
-         * root.
-         * Add 1 to strlen for leading '/' of each level.
-         */
-        let mut length = 0; // 确保 length 被正确初始化
-        let mut iteration_count = 0; // 用于记录迭代次数
-        const MAX_ITERATIONS: usize = 10; // 最大迭代次数
-
+        let mut length = kobj.name().len() + 1; // 包含当前对象的长度
+        let mut parent = match kobj.parent().and_then(|p| p.upgrade()) {
+            Some(p) => p,
+            None => {
+                log::error!("Failed to get parent of kobj");
+                return length;
+            }
+        };
+    
+        let mut iteration_count = 0;
+        const MAX_ITERATIONS: usize = 10;
+    
         loop {
             log::info!(
                 "Iteration {}: parent.name():{:?}",
@@ -278,6 +280,7 @@ impl KObjectManager {
                 parent.name()
             );
             length += parent.name().len() + 1;
+    
             if let Some(weak_parent) = parent.parent() {
                 if let Some(upgraded_parent) = weak_parent.upgrade() {
                     parent = upgraded_parent;
@@ -286,17 +289,18 @@ impl KObjectManager {
                     break;
                 }
             } else {
-                log::error!("Parent has no parent");
+                log::info!("Reached root parent");
                 break;
             }
-
+    
             iteration_count += 1;
             if iteration_count >= MAX_ITERATIONS {
                 log::error!("Reached maximum iteration count, breaking to avoid infinite loop");
                 break;
             }
         }
-        return length;
+        log::info!("get_kobj_path_length() length:{:?}", length);
+        length
     }
 
     /*
@@ -317,42 +321,55 @@ impl KObjectManager {
              kobj, __func__, path);
     }
          */
-    fn fill_kobj_path(kobj: &Arc<dyn KObject>, path: &mut [u8], length: usize) {
-        let mut parent = kobj.parent().unwrap().upgrade().unwrap();
+    fn fill_kobj_path(kobj: &Arc<dyn KObject>, path: &mut [u8], length: usize)->String {
         let mut length = length;
         length -= 1;
-        loop {
-            log::info!("fill_kobj_path parent.name():{:?}", parent.name());
+    
+        let mut parent = match kobj.parent().and_then(|p| p.upgrade()) {
+            Some(p) => p,
+            None => {
+                log::warn!("fill_kobj_path: parent is None or cannot be upgraded");
+                return String::from_utf8_lossy(&path[length..]).to_string();
+            }
+        };
+    
+        // 初始化路径数组为全零
+        for i in 0..path.len() {
+            path[i] = 0;
+        }
+    
+        while length > 0 {
             let cur = parent.name().len();
             if length < cur + 1 {
-                // 如果剩余长度不足以容纳当前名称和分隔符，则退出
                 break;
             }
+    
             length -= cur;
             let parent_name = parent.name();
             let name = parent_name.as_bytes();
-            path[length..(cur + length)].copy_from_slice(&name[..cur]);
-            length -= 1;
-            path[length] = b'/';
-            if let Some(weak_parent) = parent.parent() {
-                if let Some(upgraded_parent) = weak_parent.upgrade() {
-                    parent = upgraded_parent;
-                } else {
-                    break;
-                }
-            } else {
-                break;
+            path[length..length + cur].copy_from_slice(&name[..cur]);
+            if length > 0 {
+                length -= 1;
+                path[length] = b'/';
             }
+    
+            log::info!("path after adding '{}': {:?}", parent_name, String::from_utf8_lossy(&path[length..]));
+    
+            parent = match parent.parent().and_then(|p| p.upgrade()) {
+                Some(p) => p,
+                None => break,
+            };
         }
+        log::info!("fill_kobj_path() path:{:?}",String::from_utf8_lossy(&path[length..]));
+        return String::from_utf8_lossy(&path[length..]).to_string();
     }
-    // TODO: 实现kobject_get_path
     // https://code.dragonos.org.cn/xref/linux-6.1.9/lib/kobject.c#139
     pub fn kobject_get_path(kobj: &Arc<dyn KObject>) -> String {
         log::debug!("kobject_get_path() kobj:{:?}", kobj.name());
         let length = Self::get_kobj_path_length(kobj);
         let path: &mut [u8] = &mut vec![0; length];
-        Self::fill_kobj_path(kobj, path, length);
-        let path_string = String::from_utf8(path.to_vec()).unwrap();
+        let path_string = Self::fill_kobj_path(kobj, path, length);
+        log::debug!("kobject_get_path() path_string:{:?}", path_string);
         return path_string;
     }
 }

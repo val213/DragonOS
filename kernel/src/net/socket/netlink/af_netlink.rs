@@ -1,8 +1,6 @@
-// 参考https://code.dragonos.org.cn/xref/linux-6.1.9/net/netlink/af_netlink.c
 use super::endpoint::NetlinkEndpoint;
 use super::skbuff::netlink_overrun;
 use super::{NLmsgFlags, NLmsgType, NLmsghdr, VecExt};
-use crate::filesystem::vfs::{FilePrivateData, FileSystem, IndexNode};
 use crate::init::initcall::INITCALL_CORE;
 use crate::libs::mutex::Mutex;
 use crate::libs::rwlock::RwLock;
@@ -13,11 +11,8 @@ use crate::net::socket::netlink::NetlinkState;
 use crate::net::socket::*;
 use crate::net::socket::{AddressFamily, Endpoint, Inode, MessageFlag, Socket};
 use crate::net::syscall::SockAddrNl;
-use crate::time::timer::schedule_timeout;
-use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::{boxed::Box, vec::Vec};
-use core::any::Any;
 use core::mem;
 use core::ops::Deref;
 use core::ptr::copy_nonoverlapping;
@@ -26,7 +21,7 @@ use hashbrown::{HashMap, HashSet};
 use lazy_static::lazy_static;
 use netlink::netlink_proto::netlink_protocol::KOBJECT_UEVENT;
 use netlink::{
-    SockFlags, NETLINK_ADD_MEMBERSHIP, NETLINK_DROP_MEMBERSHIP, NETLINK_PKTINFO, NLMSG_ALIGNTO,
+    NETLINK_ADD_MEMBERSHIP, NETLINK_DROP_MEMBERSHIP, NETLINK_PKTINFO, NLMSG_ALIGNTO,
 };
 use num::Zero;
 use system_error::SystemError;
@@ -298,9 +293,8 @@ impl Socket for NetlinkSock {
         log::warn!("recv_buffer_size is implemented to 0");
         0
     }
-    // 钩子函数，用于设置socket选项
     fn set_option(&self, level: OptionsLevel, name: usize, val: &[u8]) -> Result<(), SystemError> {
-        return netlink_setsockopt(self, level, name, val);
+        return self.netlink_setsockopt(level, name, val);
     }
 }
 
@@ -329,11 +323,11 @@ impl NetlinkSock {
     fn netlink_bind(self: Arc<NetlinkSock>, addr: &SockAddrNl) -> Result<(), SystemError> {
         log::info!("netlink_bind here!");
         log::info!("netlink_bind: nl_family: {:?}", addr.nl_family);
-
+    
         let nladdr = addr;
         let mut nlk_guard = self.inner.lock();
         nlk_guard.portid = addr.nl_pid;
-
+    
         log::info!("netlink_bind: self.portid: {}", nlk_guard.portid);
         let mut groups: u32;
         log::info!("netlink_bind: nl_family: {:?}", nladdr.nl_family);
@@ -346,15 +340,17 @@ impl NetlinkSock {
         if groups != 0 {
             let group_count = addr.nl_groups.count_ones();
             nlk_guard.ngroups = group_count;
+            drop(nlk_guard);
             Arc::clone(&self)
                 .netlink_realloc_groups()
                 .expect("netlink_realloc_groups failed");
+            nlk_guard = self.inner.lock();
         }
-
+    
         if nlk_guard.ngroups < 32 {
             groups &= (1 << nlk_guard.ngroups) - 1;
         }
-
+    
         let bound = nlk_guard.bound;
         log::info!("netlink_bind: bound: {}", bound);
         if bound {
@@ -362,7 +358,7 @@ impl NetlinkSock {
                 return Err(SystemError::EINVAL);
             }
         }
-
+    
         if !bound {
             drop(nlk_guard);
             if nladdr.nl_pid != 0 {
@@ -376,24 +372,20 @@ impl NetlinkSock {
             }
             nlk_guard = self.inner.lock();
         }
-
+    
         if nladdr.nl_groups == 0 && (nlk_guard.groups.is_empty() || nlk_guard.groups[0] == 0) {
             log::info!("netlink_bind: no groups");
             return Ok(());
         }
-
+    
         log::debug!("nlk_guard.portid : {}", nlk_guard.portid);
         let new_subscriptions = nlk_guard.subscriptions + nladdr.nl_groups.count_ones()
             - nlk_guard.groups[0].count_ones();
         log::info!("netlink_bind: nlk_guard.subscriptions: {}, nladdr.nl_groups: {}, nlk_guard.groups[0]: {}", nlk_guard.subscriptions, nladdr.nl_groups, nlk_guard.groups[0]);
+        nlk_guard.groups[0] = groups;
         drop(nlk_guard);
         Arc::clone(&self).netlink_update_subscriptions(new_subscriptions);
-
-        nlk_guard = self.inner.lock();
-        nlk_guard.groups[0] = groups;
-        log::debug!("nlk_guard.portid : {}", nlk_guard.portid);
         Arc::clone(&self).netlink_update_listeners();
-        log::debug!("nlk_guard.portid : {}", nlk_guard.portid);
         Ok(())
     }
 
@@ -443,7 +435,6 @@ impl NetlinkSock {
         msg.set_ext(0, msg.len() as u32);
         // 将序列化后的 msg 添加到发送缓冲区 buffer 中
         buffer.push(msg);
-        // netlink_unicast(self, Arc::new(RwLock::new(SkBuff{sk:self,inner:buffer})), address, 0);
         Ok(data.len())
     }
 
@@ -623,7 +614,60 @@ impl NetlinkSock {
             netlink_table.mc_set
         );
     }
-
+    /// 设置 netlink 套接字的选项
+    fn netlink_setsockopt(
+        self: &Self,
+        level: OptionsLevel,
+        optname: usize,
+        optval: &[u8],
+    ) -> Result<(), SystemError> {
+        log::info!("netlink_setsockopt");
+        if level != OptionsLevel::NETLINK {
+            return Err(SystemError::ENOPROTOOPT);
+        }
+        let optlen = optval.len();
+        let mut val: usize = 0;
+        if optlen >= size_of::<usize>() {
+            unsafe {
+                if optval.len() >= size_of::<usize>() {
+                    // 将 optval 中的数据拷贝到 val 中
+                    copy_nonoverlapping(
+                        optval.as_ptr(),
+                        &mut val as *mut usize as *mut u8,
+                        size_of::<usize>(),
+                    );
+                } else {
+                    return Err(SystemError::EFAULT);
+                }
+            }
+        } else {
+            return Err(SystemError::EINVAL);
+        }
+        match optname {
+            // add 和 drop 对应同一段代码
+            NETLINK_ADD_MEMBERSHIP | NETLINK_DROP_MEMBERSHIP => {
+                let group = val as u64;
+                let mut nl_table = NL_TABLE.write();
+                let netlink_table = &mut nl_table[self.inner.lock().protocol];
+                let listeners = netlink_table.listeners.as_mut().unwrap();
+                let group = group - 1;
+                let mask = 1 << (group % 64);
+                let idx = group / 64;
+                if optname == NETLINK_ADD_MEMBERSHIP {
+                    listeners.masks[idx as usize] |= mask;
+                } else {
+                    listeners.masks[idx as usize] &= !mask;
+                }
+            }
+            NETLINK_PKTINFO => {
+                todo!();
+            }
+            _ => {
+                return Err(SystemError::ENOPROTOOPT);
+            }
+        }
+        Ok(())
+    }
     // 接收缓冲区的已分配内存
     fn sk_rmem_alloc(&self) -> usize {
         0
@@ -632,22 +676,277 @@ impl NetlinkSock {
     fn sk_rcvbuf(&self) -> usize {
         self.max_recvmsg_len
     }
-    fn is_kernel(&self) -> bool {
-        (self.inner.lock().flags != 0) & (NetlinkFlags::NETLINK_F_KERNEL_SOCKET.bits() != 0)
-    }
-    fn sock_sndtimeo(&self, noblock: bool) -> i64 {
-        if noblock {
-            return 0;
-        } else {
-            return self.sk_sndtimeo;
+    /// 尝试向指定用户进程 netlink 套接字发送组播消息
+    /// ## 参数：
+    /// - sk: 指向一个 sock 结构，对应一个用户进程 netlink 套接字
+    /// - info: 指向一个 netlink 组播消息的管理块
+    /// ## 备注：
+    /// 传入的 netlink 套接字跟组播消息属于同一种 netlink 协议类型，并且这个套接字开启了组播阅订，除了这些，其他信息(比如阅订了具体哪些组播)都是不确定的
+    /// TODO: net namespace
+    fn do_one_broadcast(
+        self: Arc<Self>,
+        info: &mut Box<NetlinkBroadcastData>,
+    ) -> Result<(), SystemError> {
+        log::info!("do_one_broadcast");
+        log::info!("do_one_broadcast: info.portid: {}", info.portid);
+        log::info!("do_one_broadcast: sk.portid: {}", self.inner.lock().portid);
+        // 如果源 sock 和目的 sock 是同一个则直接返回
+        if info.exclude_sk.inner.lock().equals(self.inner.lock()) {
+            log::info!("do_one_broadcast: exclude_sk equals sk");
+            return Err(SystemError::EINVAL);
         }
+
+        let nlk_guard = self.inner.lock();
+        log::info!("do_one_broadcast: nlk.portid: {}", nlk_guard.portid);
+        log::info!(
+            "do_one_broadcast: info.group: {}, nlk_guard.ngroups: {}, nlk_guard.groups: {:?}",
+            info.group,
+            nlk_guard.ngroups,
+            nlk_guard.groups
+        );
+        // 如果目的单播地址就是该 netlink 套接字
+        // 或者目的组播地址超出了该 netlink 套接字的上限
+        // 或者该 netlink 套接字没有阅订这条组播消息，都直接返回
+        if nlk_guard.portid == info.portid
+            || info.group > nlk_guard.ngroups
+            || !nlk_guard.groups.contains(&(info.group - 1))
+        {
+            log::warn!("do_one_broadcast: portid or group error");
+            return Err(SystemError::EINVAL);
+        }
+        log::info!(
+            "do_one_broadcast: nlk_guard.ngroups: {}, nlk_guard.groups: {:?}",
+            nlk_guard.ngroups,
+            nlk_guard.groups
+        );
+        // 如果 netlink 组播消息的管理块携带了 failure 标志, 则对该 netlink 套接字设置缓冲区溢出状态
+        if info.failure != 0 {
+            log::warn!("do_one_broadcast: failure");
+            netlink_overrun(&self);
+            return Err(SystemError::EINVAL);
+        }
+        // 设置 skb2，其内容来自 skb
+        if info.skb_2.inner.lock().is_empty() {
+            if info.skb.skb_shared() {
+                info.copy_skb_to_skb_2();
+            } else {
+                info.skb_2 = info.skb.clone();
+                info.skb_2.skb_orphan();
+            }
+        }
+        log::info!("do_one_broadcast: info.skb_2.inner: {:?}", info.skb_2.inner);
+        // 到这里如果 skb2 还是 NULL，意味着上一步中 clone 失败
+        if info.skb_2.inner.lock().is_empty() {
+            log::warn!("do_one_broadcast: skb_2 is empty");
+            netlink_overrun(&self);
+            info.failure = 1;
+            if (nlk_guard.flags != 0) & (!NetlinkFlags::BROADCAST_SEND_ERROR.bits().is_zero()) {
+                info.delivery_failure = 1;
+            }
+            return Err(SystemError::EINVAL);
+        }
+
+        if info.skb_2.sk_filter(&self) {
+            return Err(SystemError::EINVAL);
+        }
+        log::info!("do_one_broadcast: sk_filter success");
+        drop(nlk_guard);
+        let ret = Arc::clone(&self).netlink_broadcast_deliver(&mut info.skb_2);
+        let nlk_guard = self.inner.lock();
+        // 如果将承载了组播消息的 skb 发送到该用户进程 netlink 套接字失败
+        if ret.is_err() {
+            netlink_overrun(&self);
+            if nlk_guard.flags != 0 && !NetlinkFlags::BROADCAST_SEND_ERROR.bits().is_zero() {
+                info.delivery_failure = 1;
+            }
+        } else {
+            // info.congested |= -1;
+            info.delivered = 1;
+            info.skb_2 = info.skb.clone();
+        }
+
+        drop(nlk_guard);
+        log::info!("do_one_broadcast success");
+        Ok(())
+    }
+    // https://code.dragonos.org.cn/xref/linux-6.1.9/net/netlink/af_netlink.c#1499
+    /// 发送 netlink 组播消息
+    /// ## 参数
+    /// - ssk: 源 sock
+    /// - skb: 属于发送方的承载了netlink消息的skb
+    /// - portid: 目的单播地址
+    /// - group: 目的组播地址
+    ///
+    /// ## 备注: 以下2种情况都会调用到本函数：
+    ///  [1]. 用户进程   --组播--> 用户进程
+    ///  [2]. kernel     --组播--> 用户进程
+    ///
+    pub fn netlink_broadcast(
+        self: &Arc<Self>,
+        skb: SkBuff,
+        portid: u32,
+        group: u32,
+    ) -> Result<(), SystemError> {
+        log::info!("netlink_broadcast");
+
+        let mut info = Box::new(NetlinkBroadcastData {
+            exclude_sk: self,
+            portid,
+            group,
+            failure: 0,
+            delivery_failure: 0,
+            congested: 0,
+            delivered: 0,
+            skb,
+            skb_2: SkBuff::new(None),
+        });
+        let protocol = self.inner.lock().protocol;
+        // While we sleep in clone, do not allow to change socket list
+        let nl_table = NL_TABLE.read();
+        let mc_set = nl_table[protocol].mc_set.clone();
+        let hash = nl_table[protocol].hash.clone();
+        drop(nl_table);
+
+        log::info!(
+            "netlink_broadcast: mc_set: {:?}, protocol: {}",
+            mc_set,
+            protocol
+        );
+        log::info!("netlink_broadcast: hash: {:?}", hash);
+        // 遍历 netlink_table 中的所有 netlink 套接字，尝试向每一个套接字发送组播消息
+        for portid in &mc_set {
+            log::info!("netlink_broadcast: portid: {}", portid);
+            match netlink_lookup(protocol, *portid) {
+                Some(usk) => {
+                    log::info!("netlink_lookup: usk.portid: {}", usk.inner.lock().portid);
+                    if let Err(e) = Arc::clone(&usk).do_one_broadcast(&mut info) {
+                        log::error!("Failed to broadcast to portid {}: {:?}", portid, e);
+                    }
+                }
+                None => {
+                    log::warn!("No NetlinkSock found for portid: {}", portid);
+                }
+            }
+        }
+        drop(info.skb);
+
+        if info.delivery_failure != 0 {
+            return Err(SystemError::ENOBUFS);
+        }
+        drop(info.skb_2);
+
+        log::info!(
+            "info.delivered: {}, info.congested: {}",
+            info.delivered,
+            info.congested
+        );
+
+        if info.delivered != 0 {
+            if info.congested != 0 {
+                // Check if the condition for yielding the scheduler is valid
+                // if Syscall::do_sched_yield().is_err() {
+                //     log::error!("Failed to yield the scheduler");
+                //     return Err(SystemError::EAGAIN_OR_EWOULDBLOCK);
+                // }
+            }
+            return Ok(());
+        }
+        return Err(SystemError::ESRCH);
+    }
+
+    // https://code.dragonos.org.cn/xref/linux-6.1.9/net/netlink/af_netlink.c?fi=netlink_has_listeners#1400
+    /// 处理Netlink套接字的广播消息传递
+    /// - 将携带了 netlink 组播消息的 skb 发送到指定目的用户进程 netlink 套接字
+    ///
+    /// ## 参数
+    /// - sk: 指向一个 sock 结构，对应一个用户进程 netlink 套接字
+    /// - skb: 指向一个网络缓冲区 skb，携带了 netlink 组播消息
+    ///
+    /// ## 返回值      
+    ///  - -1: 套接字接收条件不满足
+    ///  - 0: netlink组播消息发送成功，套接字已经接收，尚未处理数据长度小于等于其接收缓冲的1/2
+    ///  - 1: netlink组播消息发送成功，套接字已经接收但尚未处理数据长度大于其接收缓冲的1/2(这种情况似乎意味着套接字处于拥挤状态)
+    ///
+    /// ## 备注：
+    /// - 到这里，已经确定了传入的 netlink 套接字跟组播消息匹配正确；
+    /// - netlink 组播消息不支持阻塞
+    fn netlink_broadcast_deliver(self: Arc<Self>, skb: &mut SkBuff) -> Result<i32, SystemError> {
+        log::info!("netlink_broadcast_deliver");
+
+        {
+            // 如果接收缓冲区的已分配内存小于或等于其总大小，并且套接字没有被标记为拥塞，则继续执行内部的代码块。
+            if (self.sk_rmem_alloc() <= self.sk_rcvbuf()) && !(self.state == NetlinkState::SCongested)
+            {
+                // 如果满足接收条件，则设置skb的所有者是该netlink套接字
+                skb.netlink_skb_set_owner_r(Arc::clone(&self));
+            } else {
+                return Err(SystemError::EINVAL);
+            }
+        }
+
+        // 将 skb 发送到该 netlink 套接字，实际也就是将该 skb 放入了该套接字的接收队列中
+        let _ = self.clone().netlink_sendskb(skb);
+        log::info!(
+            "netlink_send success, sk.portid: {:?}",
+            self.inner.lock().portid
+        );
+
+        {
+            // 如果套接字的接收缓冲区已经接收但尚未处理数据长度大于其接收缓冲的1/2，则返回1
+            if self.sk_rmem_alloc() > (self.sk_rcvbuf() >> 1) {
+                log::warn!("Socket buffer is more than half full, returning ENOBUFS");
+                return Err(SystemError::ENOBUFS);
+            } else {
+                log::info!("Uevent sent successfully, returning 0");
+                return Ok(0);
+            }
+        }
+    }
+
+    // https://code.dragonos.org.cn/xref/linux-6.1.9/net/netlink/af_netlink.c?fi=netlink_has_listeners#1268
+    /// 将一个网络缓冲区 skb 中的数据发送到指定的目标进程套接字 sk
+    fn netlink_sendskb(self: Arc<Self>, skb: &SkBuff) -> u32 {
+        let mut combined_message = Vec::new();
+        {
+            let inner_data = skb.inner.lock();
+            log::info!("Data in inner_data: {:?}", inner_data);
+            for segment in inner_data.iter() {
+                combined_message.extend_from_slice(segment);
+            }
+        }
+
+        // align the combined message to 4 bytes required by Netlink protocol
+        while combined_message.len() % NLMSG_ALIGNTO != 0 {
+            combined_message.push(0);
+        }
+        log::info!("Data in combined_message: {:?}", combined_message);
+        // Create a new Netlink header
+        let new_header = NLmsghdr {
+            nlmsg_len: (combined_message.len() + mem::size_of::<NLmsghdr>()),
+            nlmsg_type: NLmsgType::NLMSG_DONE,
+            nlmsg_flags: NLmsgFlags::NLM_F_MULTI,
+            nlmsg_seq: 1,
+            nlmsg_pid: 0, // 来自内核
+        };
+
+        // Serialize header and message into the final buffer
+        let mut final_msg = Vec::new();
+        final_msg.push_ext(new_header); // Add header
+        final_msg.align(); // Align the message to 4 bytes
+        final_msg.extend(combined_message); // Add the flattened message content
+        final_msg.set_ext(0, final_msg.len() as u32); // Set the length of the message
+        // Update sk_guard.data to contain the final message
+        let mut buffer = self.data.lock();
+        buffer.clear();
+        buffer.push(final_msg.clone());
+
+        final_msg.len() as u32 // Return the length of the final message
     }
 }
 
 #[derive(Clone)]
 pub struct Listeners {
-    // todo: rcu
-    // 动态位图，每一位代表一个组播组，如果对应位为 1，表示有监听
+    // 组播组掩码，每一位代表一个组播组，如果对应位为 1，表示有监听
     masks: Vec<u64>,
 }
 impl Listeners {
@@ -687,330 +986,10 @@ struct NetlinkBroadcastData<'a> {
 }
 impl<'a> NetlinkBroadcastData<'a> {
     pub fn copy_skb_to_skb_2(&mut self) {
-        log::info!("copy_skb_to_skb_2");
         let skb = self.skb.clone();
         self.skb_2 = skb;
         log::info!("copy_skb_to_skb_2: skb_2: {:?}", self.skb_2);
     }
 }
-/// 尝试向指定用户进程 netlink 套接字发送组播消息
-/// ## 参数：
-/// - sk: 指向一个 sock 结构，对应一个用户进程 netlink 套接字
-/// - info: 指向一个 netlink 组播消息的管理块
-/// ## 备注：
-/// 传入的 netlink 套接字跟组播消息属于同一种 netlink 协议类型，并且这个套接字开启了组播阅订，除了这些，其他信息(比如阅订了具体哪些组播)都是不确定的
-/// TODO: net namespace
-fn do_one_broadcast(
-    sk: Arc<NetlinkSock>,
-    info: &mut Box<NetlinkBroadcastData>,
-) -> Result<(), SystemError> {
-    log::info!("do_one_broadcast");
-    log::info!("do_one_broadcast: info.portid: {}", info.portid);
-    log::info!("do_one_broadcast: sk.portid: {}", sk.inner.lock().portid);
-    // 如果源 sock 和目的 sock 是同一个则直接返回
-    if info.exclude_sk.inner.lock().equals(sk.inner.lock()) {
-        log::info!("do_one_broadcast: exclude_sk equals sk");
-        return Err(SystemError::EINVAL);
-    }
 
-    let nlk_guard = sk.inner.lock();
-    log::info!("do_one_broadcast: nlk.portid: {}", nlk_guard.portid);
-    log::info!(
-        "do_one_broadcast: info.group: {}, nlk_guard.ngroups: {}, nlk_guard.groups: {:?}",
-        info.group,
-        nlk_guard.ngroups,
-        nlk_guard.groups
-    );
-    // 如果目的单播地址就是该 netlink 套接字
-    // 或者目的组播地址超出了该 netlink 套接字的上限
-    // 或者该 netlink 套接字没有阅订这条组播消息，都直接返回
-    if nlk_guard.portid == info.portid
-        || info.group > nlk_guard.ngroups
-        || !nlk_guard.groups.contains(&(info.group - 1))
-    {
-        log::warn!("do_one_broadcast: portid or group error");
-        return Err(SystemError::EINVAL);
-    }
-    log::info!(
-        "do_one_broadcast: nlk_guard.ngroups: {}, nlk_guard.groups: {:?}",
-        nlk_guard.ngroups,
-        nlk_guard.groups
-    );
-    // 如果 netlink 组播消息的管理块携带了 failure 标志, 则对该 netlink 套接字设置缓冲区溢出状态
-    if info.failure != 0 {
-        log::warn!("do_one_broadcast: failure");
-        netlink_overrun(&sk);
-        return Err(SystemError::EINVAL);
-    }
-    // 设置 skb2，其内容来自 skb
-    if info.skb_2.inner.lock().is_empty() {
-        if info.skb.skb_shared() {
-            info.copy_skb_to_skb_2();
-        } else {
-            info.skb_2 = info.skb.clone();
-            info.skb_2.skb_orphan();
-        }
-    }
-    log::info!("do_one_broadcast: info.skb_2.inner: {:?}", info.skb_2.inner);
-    // 到这里如果 skb2 还是 NULL，意味着上一步中 clone 失败
-    if info.skb_2.inner.lock().is_empty() {
-        log::warn!("do_one_broadcast: skb_2 is empty");
-        netlink_overrun(&sk);
-        info.failure = 1;
-        if (nlk_guard.flags != 0) & (!NetlinkFlags::BROADCAST_SEND_ERROR.bits().is_zero()) {
-            info.delivery_failure = 1;
-        }
-        return Err(SystemError::EINVAL);
-    }
 
-    if info.skb_2.sk_filter(&sk) {
-        return Err(SystemError::EINVAL);
-    }
-    log::info!("do_one_broadcast: sk_filter success");
-    drop(nlk_guard);
-    let ret = netlink_broadcast_deliver(Arc::clone(&sk), &mut info.skb_2);
-    let nlk_guard = sk.inner.lock();
-    // 如果将承载了组播消息的 skb 发送到该用户进程 netlink 套接字失败
-    if ret.is_err() {
-        netlink_overrun(&sk);
-        if nlk_guard.flags != 0 && !NetlinkFlags::BROADCAST_SEND_ERROR.bits().is_zero() {
-            info.delivery_failure = 1;
-        }
-    } else {
-        // info.congested |= -1;
-        info.delivered = 1;
-        info.skb_2 = info.skb.clone();
-    }
-
-    drop(nlk_guard);
-    log::info!("do_one_broadcast success");
-    Ok(())
-}
-// https://code.dragonos.org.cn/xref/linux-6.1.9/net/netlink/af_netlink.c#1499
-/// 发送 netlink 组播消息
-/// ## 参数
-/// - ssk: 源 sock
-/// - skb: 属于发送方的承载了netlink消息的skb
-/// - portid: 目的单播地址
-/// - group: 目的组播地址
-///
-/// ## 备注: 以下2种情况都会调用到本函数：
-///  [1]. 用户进程   --组播--> 用户进程
-///  [2]. kernel     --组播--> 用户进程
-///
-pub fn netlink_broadcast(
-    ssk: &Arc<NetlinkSock>,
-    skb: SkBuff,
-    portid: u32,
-    group: u32,
-) -> Result<(), SystemError> {
-    log::info!("netlink_broadcast");
-
-    let mut info = Box::new(NetlinkBroadcastData {
-        exclude_sk: ssk,
-        portid,
-        group,
-        failure: 0,
-        delivery_failure: 0,
-        congested: 0,
-        delivered: 0,
-        skb,
-        skb_2: SkBuff::new(None),
-    });
-    let protocol = ssk.inner.lock().protocol;
-    // While we sleep in clone, do not allow to change socket list
-    let nl_table = NL_TABLE.read();
-    let mc_set = nl_table[protocol].mc_set.clone();
-    let hash = nl_table[protocol].hash.clone();
-    drop(nl_table);
-
-    log::info!(
-        "netlink_broadcast: mc_set: {:?}, protocol: {}",
-        mc_set,
-        protocol
-    );
-    log::info!("netlink_broadcast: hash: {:?}", hash);
-    // 遍历 netlink_table 中的所有 netlink 套接字，尝试向每一个套接字发送组播消息
-    for portid in &mc_set {
-        log::info!("netlink_broadcast: portid: {}", portid);
-        match netlink_lookup(protocol, *portid) {
-            Some(usk) => {
-                log::info!("netlink_lookup: usk.portid: {}", usk.inner.lock().portid);
-                if let Err(e) = do_one_broadcast(Arc::clone(&usk), &mut info) {
-                    log::error!("Failed to broadcast to portid {}: {:?}", portid, e);
-                }
-            }
-            None => {
-                log::warn!("No NetlinkSock found for portid: {}", portid);
-            }
-        }
-    }
-    drop(info.skb);
-
-    if info.delivery_failure != 0 {
-        return Err(SystemError::ENOBUFS);
-    }
-    drop(info.skb_2);
-
-    log::info!(
-        "info.delivered: {}, info.congested: {}",
-        info.delivered,
-        info.congested
-    );
-
-    if info.delivered != 0 {
-        if info.congested != 0 {
-            // Check if the condition for yielding the scheduler is valid
-            // if Syscall::do_sched_yield().is_err() {
-            //     log::error!("Failed to yield the scheduler");
-            //     return Err(SystemError::EAGAIN_OR_EWOULDBLOCK);
-            // }
-        }
-        return Ok(());
-    }
-    return Err(SystemError::ESRCH);
-}
-
-// https://code.dragonos.org.cn/xref/linux-6.1.9/net/netlink/af_netlink.c?fi=netlink_has_listeners#1400
-/// 处理Netlink套接字的广播消息传递
-/// - 将携带了 netlink 组播消息的 skb 发送到指定目的用户进程 netlink 套接字
-///
-/// ## 参数
-/// - sk: 指向一个 sock 结构，对应一个用户进程 netlink 套接字
-/// - skb: 指向一个网络缓冲区 skb，携带了 netlink 组播消息
-///
-/// ## 返回值      
-///  - -1: 套接字接收条件不满足
-///  - 0: netlink组播消息发送成功，套接字已经接收但尚未处理数据长度小于等于其接收缓冲的1/2
-///  - 1: netlink组播消息发送成功，套接字已经接收但尚未处理数据长度大于其接收缓冲的1/2(这种情况似乎意味着套接字处于拥挤状态)
-///
-/// ## 备注：
-/// - 到这里，已经确定了传入的 netlink 套接字跟组播消息匹配正确；
-/// - netlink 组播消息不支持阻塞
-fn netlink_broadcast_deliver(sk: Arc<NetlinkSock>, skb: &mut SkBuff) -> Result<i32, SystemError> {
-    log::info!("netlink_broadcast_deliver");
-
-    {
-        // 如果接收缓冲区的已分配内存小于或等于其总大小，并且套接字没有被标记为拥塞，则继续执行内部的代码块。
-        if (sk.sk_rmem_alloc() <= sk.sk_rcvbuf()) && !(sk.state == NetlinkState::SCongested)
-        {
-            // 如果满足接收条件，则设置skb的所有者是该netlink套接字
-            skb.netlink_skb_set_owner_r(Arc::clone(&sk));
-        } else {
-            return Err(SystemError::EINVAL);
-        }
-    }
-
-    // 将 skb 发送到该 netlink 套接字，实际也就是将该 skb 放入了该套接字的接收队列中
-    let _ = netlink_sendskb(sk.clone(), skb);
-    log::info!("netlink_send success, sk.data: {:?}", sk.data);
-    log::info!(
-        "netlink_send success, sk.portid: {:?}",
-        sk.inner.lock().portid
-    );
-    log::info!("netlink_send success, sk: {:?}", sk);
-
-    {
-        // 如果套接字的接收缓冲区已经接收但尚未处理数据长度大于其接收缓冲的1/2，则返回1
-        if sk.sk_rmem_alloc() > (sk.sk_rcvbuf() >> 1) {
-            log::warn!("Socket buffer is more than half full, returning ENOBUFS");
-            return Err(SystemError::ENOBUFS);
-        } else {
-            log::info!("Uevent sent successfully, returning 0");
-            return Ok(0);
-        }
-    }
-}
-
-// https://code.dragonos.org.cn/xref/linux-6.1.9/net/netlink/af_netlink.c?fi=netlink_has_listeners#1268
-/// 将一个网络缓冲区 skb 中的数据发送到指定的目标进程套接字 sk
-fn netlink_sendskb(sk: Arc<NetlinkSock>, skb: &SkBuff) -> u32 {
-    let mut combined_message = Vec::new();
-    {
-        let inner_data = skb.inner.lock();
-        log::info!("Data in inner_data: {:?}", inner_data);
-        for segment in inner_data.iter() {
-            combined_message.extend_from_slice(segment);
-        }
-    }
-
-    // align the combined message to 4 bytes required by Netlink protocol
-    while combined_message.len() % NLMSG_ALIGNTO != 0 {
-        combined_message.push(0);
-    }
-    log::info!("Data in combined_message: {:?}", combined_message);
-    // Create a new Netlink header
-    let new_header = NLmsghdr {
-        nlmsg_len: (combined_message.len() + mem::size_of::<NLmsghdr>()),
-        nlmsg_type: NLmsgType::NLMSG_DONE,
-        nlmsg_flags: NLmsgFlags::NLM_F_MULTI,
-        nlmsg_seq: 1,
-        nlmsg_pid: 0, // 来自内核
-    };
-
-    // Serialize header and message into the final buffer
-    let mut final_msg = Vec::new();
-    final_msg.push_ext(new_header); // Add header
-    final_msg.extend(combined_message); // Add the flattened message content
-
-    // Update sk_guard.data to contain the final message
-    *sk.data.lock() = vec![final_msg.clone()];
-    log::info!("Data in sk after modification: {:?}", final_msg);
-
-    final_msg.len() as u32 // Return the length of the final message
-}
-
-/// 设置 netlink 套接字的选项
-fn netlink_setsockopt(
-    nlk: &NetlinkSock,
-    level: OptionsLevel,
-    optname: usize,
-    optval: &[u8],
-) -> Result<(), SystemError> {
-    log::info!("netlink_setsockopt");
-    if level != OptionsLevel::NETLINK {
-        return Err(SystemError::ENOPROTOOPT);
-    }
-    let optlen = optval.len();
-    let mut val: usize = 0;
-    if optlen >= size_of::<usize>() {
-        unsafe {
-            if optval.len() >= size_of::<usize>() {
-                // 将 optval 中的数据拷贝到 val 中
-                copy_nonoverlapping(
-                    optval.as_ptr(),
-                    &mut val as *mut usize as *mut u8,
-                    size_of::<usize>(),
-                );
-            } else {
-                return Err(SystemError::EFAULT);
-            }
-        }
-    } else {
-        return Err(SystemError::EINVAL);
-    }
-    match optname {
-        // add 和 drop 对应同一段代码
-        NETLINK_ADD_MEMBERSHIP | NETLINK_DROP_MEMBERSHIP => {
-            let group = val as u64;
-            let mut nl_table = NL_TABLE.write();
-            let netlink_table = &mut nl_table[nlk.inner.lock().protocol];
-            let listeners = netlink_table.listeners.as_mut().unwrap();
-            let group = group - 1;
-            let mask = 1 << (group % 64);
-            let idx = group / 64;
-            if optname == NETLINK_ADD_MEMBERSHIP {
-                listeners.masks[idx as usize] |= mask;
-            } else {
-                listeners.masks[idx as usize] &= !mask;
-            }
-        }
-        NETLINK_PKTINFO => {
-            todo!();
-        }
-        _ => {
-            return Err(SystemError::ENOPROTOOPT);
-        }
-    }
-    Ok(())
-}

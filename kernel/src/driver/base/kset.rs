@@ -97,8 +97,6 @@ impl KSet {
     /// - join_kset: 如果不为None，那么这个kset会加入到join_kset中
     pub fn register(&self, join_kset: Option<Arc<KSet>>) -> Result<(), SystemError> {
         return KObjectManager::add_kobj(self.self_ref.upgrade().unwrap(), join_kset);
-        // todo: 引入uevent之后，发送uevent
-        // kobject_uevent();
     }
 
     /// 注销一个kset
@@ -243,6 +241,7 @@ impl InnerKSet {
 // https://code.dragonos.org.cn/xref/linux-6.1.9/include/linux/kobject.h#137
 pub trait KSetUeventOps: Debug + Send + Sync {
     fn filter(&self) -> Option<i32>;
+    // uevent_name 预期返回一个字符串，用于标识uevent的来源
     fn uevent_name(&self) -> String;
     fn uevent(&self, env: &KobjUeventEnv) -> i32;
 }

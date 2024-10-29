@@ -313,14 +313,6 @@ impl Syscall {
         addr: *mut SockAddr,
         addr_len: *mut u32,
     ) -> Result<usize, SystemError> {
-        log::info!(
-            "recvfrom: fd={}, buf={:?}, flags={}, addr={:?}, addr_len={:?}",
-            fd,
-            buf,
-            flags,
-            addr,
-            addr_len
-        );
         let socket: Arc<socket::Inode> = ProcessManager::current_pcb()
             .get_socket(fd as i32)
             .ok_or(SystemError::EBADF)?;

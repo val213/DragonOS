@@ -102,10 +102,10 @@ fn receive_uevent(sock: RawFd) -> io::Result<String> {
 }
 
 
-// 模拟写入设备的uevent文件，通常在 /sys/class/net/{设备名称}/uevent
+// 模拟写入设备的 uevent 文件，通常在 /sys/class/net/{设备名称}/uevent
 fn trigger_device_uevent(device: &str) -> io::Result<()> {
-    let uevent_path = format!("/sys/class/net/{}/uevent", device);
-    let mut file = File::create(uevent_path)?;
+    let uevent_path = format!("/sys/class/rtc/{}/uevent", device);
+    let mut file = File::open(uevent_path)?;
     file.write_all(b"add\n")?;
     println!("Triggered uevent for device {}", device);
     Ok(())
@@ -154,15 +154,17 @@ fn main() {
     bind_netlink_socket(socket).expect("Failed to bind Netlink socket");
     println!("Netlink socket created and bound successfully");
 
+    // 向 Netlink 套接字的缓冲区手动发送自定义 uevent 消息
+    // send_uevent(socket, "add@/devices/virtual/block/loop0").expect("Failed to send uevent message");
+    println!("Custom uevent message sent successfully");
+
     // 向指定网卡设备的 uevent 文件写入事件，模拟设备触发 uevent
-    trigger_device_uevent("eth0").expect("Failed to trigger device uevent");
+    trigger_device_uevent("rtc0").expect("Failed to trigger device uevent");
     println!("Device uevent triggered");
 
-    let message = receive_uevent(socket).expect("Failed to receive uevent message");
 
-    // send_uevent(socket, "add@/devices/virtual/block/loop0").expect("Failed to send uevent message");
-    // println!("Custom uevent message sent successfully");
-    // let message = receive_uevent(socket).expect("Failed to receive uevent message");
+    // 目前使用缓冲区的方式接收 uevent 消息，存在的问题是最新的写入会覆盖之前的写入
+    let message = receive_uevent(socket).expect("Failed to receive uevent message");
     
-    println!("Received uevent message: {}", message);
+    println!("Received uevent message:{}", message);
 }

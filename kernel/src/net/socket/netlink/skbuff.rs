@@ -39,15 +39,10 @@ impl SkBuff {
         // todo!()
         log::debug!("skb_orphan");
     }
-
-    fn skb_recv_datagram() {}
-
-    fn skb_try_recv_datagram() {}
-
-    fn skb_try_recv_from_queue() {}
 }
 
 // 处理网络套接字的缓冲区溢出
 pub fn netlink_overrun(sk: &NetlinkSock) {
+    let _ = sk;
     // todo!()
 }

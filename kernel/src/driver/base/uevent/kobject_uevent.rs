@@ -1,3 +1,6 @@
+use core::error;
+use core::ops::Deref;
+
 // https://code.dragonos.org.cn/xref/linux-6.1.9/lib/kobject_uevent.c
 use super::KObject;
 use super::KobjUeventEnv;
@@ -6,7 +9,7 @@ use super::{UEVENT_BUFFER_SIZE, UEVENT_NUM_ENVP};
 use crate::driver::base::kobject::{KObjectManager, KObjectState};
 use crate::init::initcall::INITCALL_POSTCORE;
 use crate::libs::mutex::Mutex;
-use crate::net::socket::netlink::af_netlink::{netlink_broadcast, NetlinkSock};
+use crate::net::socket::netlink::af_netlink::NetlinkSock;
 use crate::net::socket::netlink::netlink_proto::netlink_protocol::KOBJECT_UEVENT;
 use crate::net::socket::netlink::skbuff::SkBuff;
 use crate::net::socket::netlink::{netlink_kernel_create, NetlinkKernelCfg, NL_CFG_F_NONROOT_RECV};
@@ -18,7 +21,7 @@ use alloc::vec::Vec;
 use num::Zero;
 use system_error::SystemError;
 use unified_init::macros::unified_init;
-// 全局变量
+// 全局变量，uevent 消息的序列号
 pub static UEVENT_SEQNUM: u64 = 0;
 
 struct UeventSock {
@@ -64,7 +67,6 @@ fn uevent_net_init() -> Result<(), SystemError> {
 
 /// kobject_uevent，和kobject_uevent_env功能一样，只是没有指定任何的环境变量
 pub fn kobject_uevent(kobj: Arc<dyn KObject>, action: KobjectAction) -> Result<(), SystemError> {
-    // kobject_uevent和kobject_uevent_env功能一样，只是没有指定任何的环境变量
     match kobject_uevent_env(kobj, action, Vec::new()) {
         Ok(_) => Ok(()),
         Err(e) => Err(e),
@@ -132,16 +134,13 @@ pub fn kobject_uevent_env(
     // originating subsystem
     let subsystem: String = if let Some(kset_ref) = kset.as_ref() {
         if let Some(uevent_ops) = &kset_ref.uevent_ops {
-            let name = uevent_ops.uevent_name();
-            if !name.is_empty() {
-                name
-            } else {
-                kobj.name()
-            }
+            uevent_ops.uevent_name()
         } else {
-            kobj.name()
+            log::info!("kset name: {}", kset_ref.name());
+            kset_ref.name()
         }
     } else {
+        log::error!("kobject_uevent_env: kset is None");
         kobj.name()
     };
     if subsystem.is_empty() {
@@ -154,9 +153,13 @@ pub fn kobject_uevent_env(
         argv: Vec::with_capacity(UEVENT_NUM_ENVP),
         envp: Vec::with_capacity(UEVENT_NUM_ENVP),
         envp_idx: 0,
-        buf: vec![0; UEVENT_BUFFER_SIZE],
+        buf: vec![0u8; UEVENT_BUFFER_SIZE],
         buflen: 0,
     });
+    // 需要手动填充缓冲区，不然会有非预期的字节！
+    let _ = &env.buf.fill(0);
+    log::info!("init: buf: {:?}", &env.buf);
+    log::info!("init: buf.to_string: {:?}", String::from_utf8_lossy(&env.buf));
     if env.buf.is_empty() {
         log::error!("kobject_uevent_env: failed to allocate buffer");
         return Err(SystemError::ENOMEM);
@@ -167,13 +170,12 @@ pub fn kobject_uevent_env(
     log::info!("kobject_uevent_env: devpath: {}", devpath);
     if devpath.is_empty() {
         retval = SystemError::ENOENT.to_posix_errno();
-        // goto exit
         drop(devpath);
         drop(env);
         log::warn!("kobject_uevent_env: devpath is empty");
         return Ok(retval);
     }
-    retval = env.add_uevent_var("ACTION=%s", &action_string).unwrap();
+    retval = env.add_uevent_var("ACTION=", &action_string).unwrap();
     log::info!("kobject_uevent_env: retval: {}", retval);
     if !retval.is_zero() {
         drop(devpath);
@@ -181,14 +183,14 @@ pub fn kobject_uevent_env(
         log::info!("add_uevent_var failed ACTION");
         return Ok(retval);
     };
-    retval = env.add_uevent_var("DEVPATH=%s", &devpath).unwrap();
+    retval = env.add_uevent_var("DEVPATH=", &devpath).unwrap();
     if !retval.is_zero() {
         drop(devpath);
         drop(env);
         log::info!("add_uevent_var failed DEVPATH");
         return Ok(retval);
     };
-    retval = env.add_uevent_var("SUBSYSTEM=%s", &subsystem).unwrap();
+    retval = env.add_uevent_var("SUBSYSTEM=", &subsystem).unwrap();
     if !retval.is_zero() {
         drop(devpath);
         drop(env);
@@ -199,7 +201,7 @@ pub fn kobject_uevent_env(
     /* keys passed in from the caller */
 
     for var in envp_ext {
-        let retval = env.add_uevent_var("%s", &var).unwrap();
+        let retval = env.add_uevent_var("", &var).unwrap();
         if !retval.is_zero() {
             drop(devpath);
             drop(env);
@@ -213,7 +215,6 @@ pub fn kobject_uevent_env(
                 retval = uevent_ops.uevent(&env);
                 if retval.is_zero() {
                     log::info!("kset uevent caused the event to drop!");
-                    // goto exit
                     drop(devpath);
                     drop(env);
                     return Ok(retval);
@@ -233,7 +234,7 @@ pub fn kobject_uevent_env(
 
     /* we will send an event, so request a new sequence number */
     retval =
-        KobjUeventEnv::add_uevent_var(&mut env, "SEQNUM=%llu", &(UEVENT_SEQNUM + 1).to_string())
+        KobjUeventEnv::add_uevent_var(&mut env, "SEQNUM=", &(UEVENT_SEQNUM + 1).to_string())
             .unwrap();
     if !retval.is_zero() {
         drop(devpath);
@@ -281,15 +282,15 @@ pub fn alloc_uevent_skb<'a>(
     log::info!("alloc_uevent_skb: skb: {:?}", skb);
     {
         let mut inner = skb.inner.lock();
-        inner.push(format!("{}@{}", action_string, devpath).into_bytes());
+        // 以下语句推入内容形如：add@/platform/rtc_cmos/rtc0
+        // inner.push(format!("{}@{}", action_string, devpath).into_bytes());
+        // 以下语句推入内容形如：ACTION=add DEVPATH=/platform/rtc_cmos/rtc0 SUBSYSTEM=rtc SEQNUM=1
         inner.push(env.buf.clone());
     }
-    log::info!("alloc_uevent_skb: skb.inner: {:?}", skb.inner);
-    log::info!(
-        "alloc_uevent_skb: action_string: {}, devpath: {}",
-        action_string,
-        devpath
-    );
+    let binding = skb.clone();
+    let binding = binding.inner.lock();
+    let debug_inner = binding.deref();
+    log::info!("alloc_uevent_skb: inner: {:?}", debug_inner);
     skb
 }
 // https://code.dragonos.org.cn/xref/linux-6.1.9/lib/kobject_uevent.c#309
@@ -320,7 +321,7 @@ pub fn uevent_net_broadcast_untagged(
         let netlink_socket = Arc::clone(&ue_sk.inner);
         // portid = 0: 表示消息发送给内核或所有监听的进程，而不是特定的用户空间进程。
         // group = 1: 表示消息发送给 netlink 多播组 ID 为 1 的组。在 netlink 广播中，组 ID 1 通常用于 uevent 消息。
-        retval = match netlink_broadcast(&netlink_socket, skb, 0, 1) {
+        retval = match netlink_socket.netlink_broadcast( skb, 0, 1) {
             Ok(_) => 0,
             Err(err) => err.to_posix_errno(),
         };

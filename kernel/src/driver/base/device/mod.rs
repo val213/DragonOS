@@ -43,7 +43,7 @@ use super::{
     },
     kset::KSet,
     swnode::software_node_notify,
-    uevent::UeventAttr,
+    uevent::{kobject_uevent::kobject_uevent, KobjectAction, UeventAttr},
 };
 
 pub mod bus;
@@ -547,8 +547,7 @@ impl DeviceManager {
             );
         }
 
-        // todo: 发送uevent: KOBJ_ADD
-        // kobject_uevent();
+        let _ = kobject_uevent(device.clone(), KobjectAction::KOBJADD);
         // probe drivers for a new device
         bus_probe_device(&device);
 
