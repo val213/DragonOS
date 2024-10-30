@@ -235,7 +235,7 @@ impl Device for FbConsoleDevice {
     }
 
     fn attribute_groups(&self) -> Option<&'static [&'static dyn AttributeGroup]> {
-        return Some(&[&AnonymousAttributeGroup, &CommonAttrGroup]);
+        Some(&[&AnonymousAttributeGroup, &CommonAttrGroup])
     }
 
     fn dev_parent(&self) -> Option<Weak<dyn Device>> {

@@ -14,8 +14,7 @@ use crate::{
         base::{
             class::Class,
             device::{
-                bus::Bus, device_manager, driver::Driver, Device, DeviceCommonData, DeviceState,
-                DeviceType, IdTable,
+                bus::Bus, device_manager, driver::Driver, CommonAttrGroup, Device, DeviceCommonData, DeviceState, DeviceType, IdTable
             },
             kobject::{KObjType, KObject, KObjectCommonData, KObjectState, LockedKObjectState},
             kset::KSet,
@@ -24,7 +23,7 @@ use crate::{
         rtc::{RtcClassOps, RtcDevice, RtcTime},
     },
     exception::InterruptArch,
-    filesystem::kernfs::KernFSInode,
+    filesystem::{kernfs::KernFSInode, sysfs::AttributeGroup},
     init::initcall::INITCALL_DEVICE,
     libs::{
         mutex::Mutex,
@@ -170,6 +169,10 @@ impl Device for CmosRtcDevice {
 
     fn set_dev_parent(&self, parent: Option<Weak<dyn Device>>) {
         self.inner().device_common.parent = parent;
+    }
+
+    fn attribute_groups(&self) -> Option<&'static [&'static dyn AttributeGroup]> {
+        Some(&[&CommonAttrGroup])
     }
 }
 

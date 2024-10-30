@@ -16,8 +16,7 @@ use crate::{
         base::{
             class::Class,
             device::{
-                bus::Bus, device_manager, device_number::Major, driver::Driver, Device,
-                DeviceCommonData, DeviceKObjType, DeviceState, DeviceType, IdTable,
+                bus::Bus, device_manager, device_number::Major, driver::Driver, CommonAttrGroup, Device, DeviceCommonData, DeviceKObjType, DeviceState, DeviceType, IdTable
             },
             kobject::{KObjType, KObject, KObjectCommonData, KObjectState, LockedKObjectState},
             kset::KSet,
@@ -28,7 +27,7 @@ use crate::{
         },
         tty::tty_driver::{TtyDriver, TtyDriverManager, TtyDriverType},
     },
-    filesystem::kernfs::KernFSInode,
+    filesystem::{kernfs::KernFSInode, sysfs::AttributeGroup},
     libs::rwlock::{RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
@@ -297,6 +296,10 @@ impl Device for Serial8250ISADevices {
 
     fn set_dev_parent(&self, dev_parent: Option<Weak<dyn Device>>) {
         self.inner.write().device_common.parent = dev_parent;
+    }
+            
+    fn attribute_groups(&self) -> Option<&'static [&'static dyn AttributeGroup]> {
+        Some(&[&CommonAttrGroup])
     }
 }
 

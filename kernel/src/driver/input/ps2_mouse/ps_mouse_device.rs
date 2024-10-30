@@ -15,8 +15,7 @@ use crate::{
         base::{
             class::Class,
             device::{
-                bus::Bus, device_manager, device_number::DeviceNumber, driver::Driver, Device,
-                DeviceCommonData, DeviceType, IdTable,
+                bus::Bus, device_manager, device_number::DeviceNumber, driver::Driver, CommonAttrGroup, Device, DeviceCommonData, DeviceType, IdTable
             },
             kobject::{KObjType, KObject, KObjectCommonData, KObjectState, LockedKObjectState},
             kset::KSet,
@@ -28,12 +27,10 @@ use crate::{
     },
     exception::InterruptArch,
     filesystem::{
-        devfs::{devfs_register, DevFS, DeviceINode},
-        kernfs::KernFSInode,
-        vfs::{
+        devfs::{devfs_register, DevFS, DeviceINode}, kernfs::KernFSInode, sysfs::AttributeGroup, vfs::{
             core::generate_inode_id, syscall::ModeType, utils::DName, FilePrivateData, FileSystem,
             FileType, IndexNode, Metadata,
-        },
+        }
     },
     libs::{
         rwlock::{RwLockReadGuard, RwLockWriteGuard},
@@ -485,6 +482,10 @@ impl Device for Ps2MouseDevice {
 
     fn set_dev_parent(&self, dev_parent: Option<alloc::sync::Weak<dyn Device>>) {
         self.inner().device_common.parent = dev_parent;
+    }
+        
+    fn attribute_groups(&self) -> Option<&'static [&'static dyn AttributeGroup]> {
+        Some(&[&CommonAttrGroup])
     }
 }
 

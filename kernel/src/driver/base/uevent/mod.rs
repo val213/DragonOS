@@ -122,9 +122,6 @@ impl KobjUeventEnv {
 
         /// 以格式化字符的形式，将环境变量copy到env指针中。
     pub fn add_uevent_var(&mut self, format: &str, args: &str) -> Result<i32, SystemError> {
-        log::info!("add_uevent_var: format: {}, args: {}", format, args);
-        log::info!("add_uevent_var: buf: {:?}", self.buf);
-        log::info!("add_uevent_var: buf.to_string: {:?}", String::from_utf8_lossy(&self.buf));
         if self.envp_idx >= self.envp.capacity() {
             log::info!("add_uevent_var: too many keys");
             return Err(SystemError::ENOMEM);
@@ -141,7 +138,6 @@ impl KobjUeventEnv {
         // Convert the buffer to bytes and add to env.buf
         self.buf.extend_from_slice(buffer.as_bytes());
         self.buf.push(0); // Null-terminate the string
-        log::info!("add_uevent_var: buf: {:?}", self.buf);
         self.buflen += len + 1;
     
         // Add the string to envp
@@ -239,6 +235,12 @@ impl Attribute for UeventAttr {
                 let device_name = device.name();
                 writeln!(&mut uevent_content, "DEVNAME={}", device_name).unwrap();
                 writeln!(&mut uevent_content, "DEVTYPE=pci").unwrap();
+            }
+            DeviceType::PlatformDev => {
+                // 处理Platform设备类型
+                let device_name = device.name();
+                writeln!(&mut uevent_content, "DEVNAME={}", device_name).unwrap();
+                writeln!(&mut uevent_content, "DEVTYPE=platform").unwrap();
             }
             _ => {
                 // 处理其他设备类型

@@ -98,7 +98,6 @@ pub fn kobject_uevent_env(
      * do not want to re-trigger "remove" event via automatic cleanup.
      */
     if let KobjectAction::KOBJREMOVE = action {
-        log::info!("kobject_uevent_env: action: remove");
         state.insert(KObjectState::REMOVE_UEVENT_SENT);
     }
 
@@ -136,7 +135,6 @@ pub fn kobject_uevent_env(
         if let Some(uevent_ops) = &kset_ref.uevent_ops {
             uevent_ops.uevent_name()
         } else {
-            log::info!("kset name: {}", kset_ref.name());
             kset_ref.name()
         }
     } else {
@@ -146,7 +144,6 @@ pub fn kobject_uevent_env(
     if subsystem.is_empty() {
         log::info!("unset subsystem caused the event to drop!");
     }
-    log::info!("kobject_uevent_env: subsystem: {}", subsystem);
 
     // 创建一个用于环境变量的缓冲区
     let mut env = Box::new(KobjUeventEnv {
@@ -158,8 +155,6 @@ pub fn kobject_uevent_env(
     });
     // 需要手动填充缓冲区，不然会有非预期的字节！
     let _ = &env.buf.fill(0);
-    log::info!("init: buf: {:?}", &env.buf);
-    log::info!("init: buf.to_string: {:?}", String::from_utf8_lossy(&env.buf));
     if env.buf.is_empty() {
         log::error!("kobject_uevent_env: failed to allocate buffer");
         return Err(SystemError::ENOMEM);
@@ -176,7 +171,6 @@ pub fn kobject_uevent_env(
         return Ok(retval);
     }
     retval = env.add_uevent_var("ACTION=", &action_string).unwrap();
-    log::info!("kobject_uevent_env: retval: {}", retval);
     if !retval.is_zero() {
         drop(devpath);
         drop(env);
@@ -246,7 +240,6 @@ pub fn kobject_uevent_env(
     // todo: 设置了 UEVENT_HELP 编译条件之后，使用 handle_uevent_helper() 对指定的 uevent 进行处理，通常是热插拔程序 mdev、udev 等
     drop(devpath);
     drop(env);
-    log::info!("kobject_uevent_env: retval: {}", retval);
     return Ok(retval);
 }
 
@@ -273,13 +266,11 @@ pub fn alloc_uevent_skb<'a>(
 ) -> SkBuff {
     let len = action_string.len() + devpath.len() + 2;
     let total_len = len + env.buflen;
-    log::info!("alloc_uevent_skb: total_len: {}, len: {}", total_len, len);
     // 分配一个新的 skb
     let skb = SkBuff {
         sk: Arc::new(NetlinkSock::new(None)),
         inner: Arc::new(Mutex::new(Vec::with_capacity(total_len))),
     };
-    log::info!("alloc_uevent_skb: skb: {:?}", skb);
     {
         let mut inner = skb.inner.lock();
         // 以下语句推入内容形如：add@/platform/rtc_cmos/rtc0
@@ -287,10 +278,6 @@ pub fn alloc_uevent_skb<'a>(
         // 以下语句推入内容形如：ACTION=add DEVPATH=/platform/rtc_cmos/rtc0 SUBSYSTEM=rtc SEQNUM=1
         inner.push(env.buf.clone());
     }
-    let binding = skb.clone();
-    let binding = binding.inner.lock();
-    let debug_inner = binding.deref();
-    log::info!("alloc_uevent_skb: inner: {:?}", debug_inner);
     skb
 }
 // https://code.dragonos.org.cn/xref/linux-6.1.9/lib/kobject_uevent.c#309
@@ -300,11 +287,6 @@ pub fn uevent_net_broadcast_untagged(
     action_string: &str,
     devpath: &str,
 ) -> i32 {
-    log::info!(
-        "uevent_net_broadcast_untagged: action_string: {}, devpath: {}",
-        action_string,
-        devpath
-    );
     let mut retval = 0;
 
     // 锁定 UEVENT_SOCK_LIST 并遍历
@@ -317,7 +299,6 @@ pub fn uevent_net_broadcast_untagged(
         }
         // 分配一个新的 skb
         let skb = alloc_uevent_skb(env, action_string, devpath);
-        log::info!("next is netlink_broadcast");
         let netlink_socket = Arc::clone(&ue_sk.inner);
         // portid = 0: 表示消息发送给内核或所有监听的进程，而不是特定的用户空间进程。
         // group = 1: 表示消息发送给 netlink 多播组 ID 为 1 的组。在 netlink 广播中，组 ID 1 通常用于 uevent 消息。
@@ -325,7 +306,6 @@ pub fn uevent_net_broadcast_untagged(
             Ok(_) => 0,
             Err(err) => err.to_posix_errno(),
         };
-        log::info!("finished netlink_broadcast");
         // ENOBUFS should be handled in userspace
         if retval == SystemError::ENOBUFS.to_posix_errno()
             || retval == SystemError::ESRCH.to_posix_errno()

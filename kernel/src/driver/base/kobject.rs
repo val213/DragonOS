@@ -260,7 +260,6 @@ impl KObjectManager {
     }
 
     fn get_kobj_path_length(kobj: &Arc<dyn KObject>) -> usize {
-        log::info!("get_kobj_path_length() kobj:{:?}", kobj.name());
         let mut length = kobj.name().len() + 1; // 包含当前对象的长度
         let mut parent = match kobj.parent().and_then(|p| p.upgrade()) {
             Some(p) => p,
@@ -274,11 +273,6 @@ impl KObjectManager {
         const MAX_ITERATIONS: usize = 10;
     
         loop {
-            log::info!(
-                "Iteration {}: parent.name():{:?}",
-                iteration_count,
-                parent.name()
-            );
             length += parent.name().len() + 1;
     
             if let Some(weak_parent) = parent.parent() {
@@ -299,7 +293,6 @@ impl KObjectManager {
                 break;
             }
         }
-        log::info!("get_kobj_path_length() length:{:?}", length);
         length
     }
 
@@ -353,19 +346,16 @@ impl KObjectManager {
                 path[length] = b'/';
             }
     
-            log::info!("path after adding '{}': {:?}", parent_name, String::from_utf8_lossy(&path[length..]));
     
             parent = match parent.parent().and_then(|p| p.upgrade()) {
                 Some(p) => p,
                 None => break,
             };
         }
-        log::info!("fill_kobj_path() path:{:?}",String::from_utf8_lossy(&path[length..]));
         return String::from_utf8_lossy(&path[length..]).to_string();
     }
     // https://code.dragonos.org.cn/xref/linux-6.1.9/lib/kobject.c#139
     pub fn kobject_get_path(kobj: &Arc<dyn KObject>) -> String {
-        log::debug!("kobject_get_path() kobj:{:?}", kobj.name());
         let length = Self::get_kobj_path_length(kobj);
         let path: &mut [u8] = &mut vec![0; length];
         let path_string = Self::fill_kobj_path(kobj, path, length);
