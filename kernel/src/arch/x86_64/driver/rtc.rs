@@ -14,7 +14,8 @@ use crate::{
         base::{
             class::Class,
             device::{
-                bus::Bus, device_manager, driver::Driver, CommonAttrGroup, Device, DeviceCommonData, DeviceState, DeviceType, IdTable
+                bus::Bus, device_manager, driver::Driver, CommonAttrGroup, Device,
+                DeviceCommonData, DeviceState, DeviceType, IdTable,
             },
             kobject::{KObjType, KObject, KObjectCommonData, KObjectState, LockedKObjectState},
             kset::KSet,

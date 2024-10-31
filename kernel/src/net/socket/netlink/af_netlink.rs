@@ -1,6 +1,7 @@
 use super::endpoint::NetlinkEndpoint;
 use super::skbuff::netlink_overrun;
 use super::{NLmsgFlags, NLmsgType, NLmsghdr, VecExt};
+use crate::driver::base::uevent::kobject_uevent::UEVENT_SEQNUM;
 use crate::init::initcall::INITCALL_CORE;
 use crate::libs::mutex::Mutex;
 use crate::libs::rwlock::RwLock;
@@ -20,9 +21,7 @@ use core::{fmt::Debug, hash::Hash};
 use hashbrown::{HashMap, HashSet};
 use lazy_static::lazy_static;
 use netlink::netlink_proto::netlink_protocol::KOBJECT_UEVENT;
-use netlink::{
-    NETLINK_ADD_MEMBERSHIP, NETLINK_DROP_MEMBERSHIP, NETLINK_PKTINFO, NLMSG_ALIGNTO,
-};
+use netlink::{NETLINK_ADD_MEMBERSHIP, NETLINK_DROP_MEMBERSHIP, NETLINK_PKTINFO, NLMSG_ALIGNTO};
 use num::Zero;
 use system_error::SystemError;
 use unified_init::macros::unified_init;
@@ -128,7 +127,6 @@ pub fn netlink_insert(nlk: Arc<NetlinkSock>, portid: u32) -> Result<(), SystemEr
 
     // 将套接字插入哈希表
     nl_table[index].hash.insert(portid, nlk);
-
 
     Ok(())
 }
@@ -317,7 +315,7 @@ impl NetlinkSock {
     fn netlink_connect(&self, _endpoint: Endpoint) -> Result<(), SystemError> {
         Ok(())
     }
-    
+
     fn netlink_bind(self: Arc<NetlinkSock>, addr: &SockAddrNl) -> Result<(), SystemError> {
         let nladdr = addr;
         let mut nlk_guard = self.inner.lock();
@@ -338,11 +336,11 @@ impl NetlinkSock {
                 .expect("netlink_realloc_groups failed");
             nlk_guard = self.inner.lock();
         }
-    
+
         if nlk_guard.ngroups < 32 {
             groups &= (1 << nlk_guard.ngroups) - 1;
         }
-    
+
         let bound = nlk_guard.bound;
         log::info!("netlink_bind: bound: {}", bound);
         if bound {
@@ -350,7 +348,7 @@ impl NetlinkSock {
                 return Err(SystemError::EINVAL);
             }
         }
-    
+
         if !bound {
             drop(nlk_guard);
             if nladdr.nl_pid != 0 {
@@ -362,12 +360,12 @@ impl NetlinkSock {
             }
             nlk_guard = self.inner.lock();
         }
-    
+
         if nladdr.nl_groups == 0 && (nlk_guard.groups.is_empty() || nlk_guard.groups[0] == 0) {
             log::info!("netlink_bind: no groups");
             return Ok(());
         }
-    
+
         let new_subscriptions = nlk_guard.subscriptions + nladdr.nl_groups.count_ones()
             - nlk_guard.groups[0].count_ones();
         nlk_guard.groups[0] = groups;
@@ -402,7 +400,8 @@ impl NetlinkSock {
         }
         let message_type = header.nlmsg_type;
         let mut buffer = self.data.lock();
-        buffer.clear();
+        log::info!("netlink_send: buffer.len: {}", buffer.len());
+        // buffer.clear();
 
         let mut msg = Vec::new();
         let new_header = NLmsghdr {
@@ -440,10 +439,12 @@ impl NetlinkSock {
         log::info!("netlink_recv on : {:?}", self);
         let nlk = self.inner.lock();
         let mut buffer = self.data.lock();
+        log::info!("netlink_recv: buffer.len: {}", buffer.len());
         // 检查 buffer 是否为空
         if buffer.is_empty() {
             return Err(SystemError::ENOBUFS);
         }
+        // 从 buffer 中取出第一个消息
         let msg_kernel = buffer.remove(0);
         // 判断是否是带外消息，如果是带外消息，直接返回错误码
         if flags == MessageFlag::OOB {
@@ -807,13 +808,13 @@ impl NetlinkSock {
     ///
     /// ## 备注：
     /// - 到这里，已经确定了传入的 netlink 套接字跟组播消息匹配正确；
-    /// - netlink 组播消息不支持阻塞
     fn netlink_broadcast_deliver(self: Arc<Self>, skb: &mut SkBuff) -> Result<i32, SystemError> {
         log::info!("netlink_broadcast_deliver");
 
         {
             // 如果接收缓冲区的已分配内存小于或等于其总大小，并且套接字没有被标记为拥塞，则继续执行内部的代码块。
-            if (self.sk_rmem_alloc() <= self.sk_rcvbuf()) && !(self.state == NetlinkState::SCongested)
+            if (self.sk_rmem_alloc() <= self.sk_rcvbuf())
+                && !(self.state == NetlinkState::SCongested)
             {
                 // 如果满足接收条件，则设置skb的所有者是该netlink套接字
                 skb.netlink_skb_set_owner_r(Arc::clone(&self));
@@ -838,7 +839,7 @@ impl NetlinkSock {
     }
 
     // https://code.dragonos.org.cn/xref/linux-6.1.9/net/netlink/af_netlink.c?fi=netlink_has_listeners#1268
-    /// 将一个网络缓冲区 skb 中的数据发送到指定的目标进程套接字 sk
+    /// 将一个网络缓冲区 skb 中的数据发送到指定的目标进程套接字
     fn netlink_sendskb(self: Arc<Self>, skb: &SkBuff) -> u32 {
         let mut combined_message = Vec::new();
         {
@@ -858,7 +859,7 @@ impl NetlinkSock {
             nlmsg_len: (combined_message.len() + mem::size_of::<NLmsghdr>()),
             nlmsg_type: NLmsgType::NLMSG_DONE,
             nlmsg_flags: NLmsgFlags::NLM_F_MULTI,
-            nlmsg_seq: 1,
+            nlmsg_seq: UEVENT_SEQNUM,
             nlmsg_pid: 0, // 来自内核
         };
 
@@ -868,9 +869,10 @@ impl NetlinkSock {
         final_msg.align(); // Align the message to 4 bytes
         final_msg.extend(combined_message); // Add the flattened message content
         final_msg.set_ext(0, final_msg.len() as u32); // Set the length of the message
-        // Update sk_guard.data to contain the final message
+                                                      // Update sk_guard.data to contain the final message
         let mut buffer = self.data.lock();
-        buffer.clear();
+        log::info!("netlink_sendskb: buffer.len: {}", buffer.len());
+        // buffer.clear();
         buffer.push(final_msg.clone());
         log::info!("netlink_sendskb: buffer: {:?}", buffer.deref());
 
@@ -923,5 +925,3 @@ impl<'a> NetlinkBroadcastData<'a> {
         self.skb_2 = skb;
     }
 }
-
-

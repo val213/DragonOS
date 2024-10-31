@@ -1,9 +1,9 @@
-use core::{any::Any, fmt::Debug, hash::Hash, ops::Deref};
 use alloc::string::ToString;
 use alloc::{
     string::String,
     sync::{Arc, Weak},
 };
+use core::{any::Any, fmt::Debug, hash::Hash, ops::Deref};
 use driver_base_macros::get_weak_or_clear;
 use intertrait::CastFromSync;
 use log::{debug, error};
@@ -21,7 +21,10 @@ use crate::{
 
 use system_error::SystemError;
 
-use super::{kset::KSet, uevent::{kobject_uevent::kobject_uevent, KobjectAction}};
+use super::{
+    kset::KSet,
+    uevent::{kobject_uevent::kobject_uevent, KobjectAction},
+};
 
 pub trait KObject: Any + Send + Sync + Debug + CastFromSync {
     fn as_any_ref(&self) -> &dyn core::any::Any;
@@ -268,13 +271,13 @@ impl KObjectManager {
                 return length;
             }
         };
-    
+
         let mut iteration_count = 0;
         const MAX_ITERATIONS: usize = 10;
-    
+
         loop {
             length += parent.name().len() + 1;
-    
+
             if let Some(weak_parent) = parent.parent() {
                 if let Some(upgraded_parent) = weak_parent.upgrade() {
                     parent = upgraded_parent;
@@ -286,7 +289,7 @@ impl KObjectManager {
                 log::info!("Reached root parent");
                 break;
             }
-    
+
             iteration_count += 1;
             if iteration_count >= MAX_ITERATIONS {
                 log::error!("Reached maximum iteration count, breaking to avoid infinite loop");
@@ -314,10 +317,10 @@ impl KObjectManager {
              kobj, __func__, path);
     }
          */
-    fn fill_kobj_path(kobj: &Arc<dyn KObject>, path: &mut [u8], length: usize)->String {
+    fn fill_kobj_path(kobj: &Arc<dyn KObject>, path: &mut [u8], length: usize) -> String {
         let mut length = length;
         length -= 1;
-    
+
         let mut parent = match kobj.parent().and_then(|p| p.upgrade()) {
             Some(p) => p,
             None => {
@@ -325,18 +328,18 @@ impl KObjectManager {
                 return String::from_utf8_lossy(&path[length..]).to_string();
             }
         };
-    
+
         // 初始化路径数组为全零
         for i in 0..path.len() {
             path[i] = 0;
         }
-    
+
         while length > 0 {
             let cur = parent.name().len();
             if length < cur + 1 {
                 break;
             }
-    
+
             length -= cur;
             let parent_name = parent.name();
             let name = parent_name.as_bytes();
@@ -345,8 +348,7 @@ impl KObjectManager {
                 length -= 1;
                 path[length] = b'/';
             }
-    
-    
+
             parent = match parent.parent().and_then(|p| p.upgrade()) {
                 Some(p) => p,
                 None => break,

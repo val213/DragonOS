@@ -22,7 +22,7 @@ use num::Zero;
 use system_error::SystemError;
 use unified_init::macros::unified_init;
 // 全局变量，uevent 消息的序列号
-pub static UEVENT_SEQNUM: u64 = 0;
+pub static UEVENT_SEQNUM: u32 = 0;
 
 struct UeventSock {
     inner: Arc<NetlinkSock>,
@@ -227,9 +227,8 @@ pub fn kobject_uevent_env(
     }
 
     /* we will send an event, so request a new sequence number */
-    retval =
-        KobjUeventEnv::add_uevent_var(&mut env, "SEQNUM=", &(UEVENT_SEQNUM + 1).to_string())
-            .unwrap();
+    retval = KobjUeventEnv::add_uevent_var(&mut env, "SEQNUM=", &(UEVENT_SEQNUM + 1).to_string())
+        .unwrap();
     if !retval.is_zero() {
         drop(devpath);
         drop(env);
@@ -302,7 +301,7 @@ pub fn uevent_net_broadcast_untagged(
         let netlink_socket = Arc::clone(&ue_sk.inner);
         // portid = 0: 表示消息发送给内核或所有监听的进程，而不是特定的用户空间进程。
         // group = 1: 表示消息发送给 netlink 多播组 ID 为 1 的组。在 netlink 广播中，组 ID 1 通常用于 uevent 消息。
-        retval = match netlink_socket.netlink_broadcast( skb, 0, 1) {
+        retval = match netlink_socket.netlink_broadcast(skb, 0, 1) {
             Ok(_) => 0,
             Err(err) => err.to_posix_errno(),
         };

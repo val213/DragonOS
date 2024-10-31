@@ -12,7 +12,11 @@ use crate::{
             char::CharDevice,
             class::Class,
             device::{
-                bus::Bus, device_number::{DeviceNumber, Major}, device_register, driver::Driver, CommonAttrGroup, Device, DeviceKObjType, DeviceType, IdTable
+                bus::Bus,
+                device_number::{DeviceNumber, Major},
+                device_register,
+                driver::Driver,
+                CommonAttrGroup, Device, DeviceKObjType, DeviceType, IdTable,
             },
             kobject::{KObject, LockedKObjectState},
             kset::KSet,
@@ -20,7 +24,10 @@ use crate::{
         serial::serial_init,
     },
     filesystem::{
-        devfs::{devfs_register, DevFS, DeviceINode}, kernfs::KernFSInode, sysfs::AttributeGroup, vfs::{file::FileMode, syscall::ModeType, FilePrivateData, FileType, IndexNode, Metadata}
+        devfs::{devfs_register, DevFS, DeviceINode},
+        kernfs::KernFSInode,
+        sysfs::AttributeGroup,
+        vfs::{file::FileMode, syscall::ModeType, FilePrivateData, FileType, IndexNode, Metadata},
     },
     init::initcall::INITCALL_DEVICE,
     libs::{
@@ -558,7 +565,7 @@ impl Device for TtyDevice {
     ) {
         todo!()
     }
-    
+
     fn attribute_groups(&self) -> Option<&'static [&'static dyn AttributeGroup]> {
         Some(&[&CommonAttrGroup])
     }

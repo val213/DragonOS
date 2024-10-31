@@ -1,10 +1,9 @@
-use libc::{sockaddr,  recvfrom, bind, socket, setsockopt, AF_NETLINK, SOCK_DGRAM, getpid, c_void};
-use netlink_sys::constants::NETLINK_ADD_MEMBERSHIP;
-use nix::libc::{self, sendto, SOL_SOCKET};
+use libc::{sockaddr,  recvfrom, bind, socket, AF_NETLINK, SOCK_DGRAM, getpid, c_void};
+use nix::libc::{self, close, sendto};
 use std::fs::File;
 use std::io::Write;
 use std::os::unix::io::RawFd;
-use std::{ mem, io};
+use std::{mem, io};
 
 #[repr(C)]
 struct Nlmsghdr {
@@ -43,10 +42,6 @@ fn bind_netlink_socket(sock: RawFd) -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
 
-    
-    // unsafe { setsockopt(sock, SOL_SOCKET,NETLINK_ADD_MEMBERSHIP, &addr.nl_groups as *const _ as *const c_void,
-    //     size_of::<u32>() as libc::socklen_t)};
-
     println!("bind success");
     Ok(())
 }
@@ -60,8 +55,6 @@ fn receive_uevent(sock: RawFd) -> io::Result<String> {
     }
 
     let mut buf = [0u8; 1024];
-    // let mut addr: sockaddr_storage = unsafe { mem::zeroed() };
-    // let mut addr_len = mem::size_of::<sockaddr_storage>() as u32;
 
     // 检查缓冲区指针和长度是否有效
     if buf.is_empty() {
@@ -155,16 +148,19 @@ fn main() {
     println!("Netlink socket created and bound successfully");
 
     // 向 Netlink 套接字的缓冲区手动发送自定义 uevent 消息
-    // send_uevent(socket, "add@/devices/virtual/block/loop0").expect("Failed to send uevent message");
+    send_uevent(socket, "add@/devices/virtual/block/loop0").expect("Failed to send uevent message");
     println!("Custom uevent message sent successfully");
 
     // 向指定网卡设备的 uevent 文件写入事件，模拟设备触发 uevent
     trigger_device_uevent("rtc0").expect("Failed to trigger device uevent");
     println!("Device uevent triggered");
-
-
-    // 目前使用缓冲区的方式接收 uevent 消息，存在的问题是最新的写入会覆盖之前的写入
-    let message = receive_uevent(socket).expect("Failed to receive uevent message");
-    
-    println!("Received uevent message:{}", message);
+    let message1 = receive_uevent(socket).expect("Failed to receive uevent message");
+    println!("Received uevent message: {}", message1);
+    let message2 = receive_uevent(socket).expect("Failed to receive uevent message");
+    println!("Received uevent message: {}", message2);
+    // Ensure the socket is closed after use
+    unsafe {
+        close(socket);
+    }
+    println!("Netlink socket closed successfully");
 }

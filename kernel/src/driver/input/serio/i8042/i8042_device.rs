@@ -7,7 +7,8 @@ use crate::{
     driver::base::{
         class::Class,
         device::{
-            bus::Bus, driver::Driver, CommonAttrGroup, Device, DeviceCommonData, DeviceState, DeviceType, IdTable
+            bus::Bus, driver::Driver, CommonAttrGroup, Device, DeviceCommonData, DeviceState,
+            DeviceType, IdTable,
         },
         kobject::{KObjType, KObject, KObjectCommonData, KObjectState, LockedKObjectState},
         kset::KSet,
@@ -115,7 +116,7 @@ impl Device for I8042PlatformDevice {
     fn set_dev_parent(&self, dev_parent: Option<Weak<dyn Device>>) {
         self.inner().device_common.parent = dev_parent;
     }
-        
+
     fn attribute_groups(&self) -> Option<&'static [&'static dyn AttributeGroup]> {
         Some(&[&CommonAttrGroup])
     }

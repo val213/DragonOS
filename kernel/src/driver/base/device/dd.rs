@@ -5,7 +5,10 @@ use intertrait::cast::CastArc;
 use log::{debug, error, warn};
 
 use crate::{
-    driver::base::{kobject::KObject, uevent::{kobject_uevent::kobject_uevent, KobjectAction}},
+    driver::base::{
+        kobject::KObject,
+        uevent::{kobject_uevent::kobject_uevent, KobjectAction},
+    },
     filesystem::{
         sysfs::{
             file::sysfs_emit_str, sysfs_instance, Attribute, SysFSOpsSupport, SYSFS_ATTR_MODE_WO,
