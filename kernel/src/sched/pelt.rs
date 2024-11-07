@@ -43,7 +43,7 @@ impl SchedulerAvg {
     pub fn get_pelt_divider(&self) -> usize {
         return PELT_MIN_DIVIDER + self.period_contrib as usize;
     }
-
+    /// 更新负载总和
     pub fn update_load_sum(
         &mut self,
         now: u64,
@@ -72,7 +72,7 @@ impl SchedulerAvg {
 
         self.accumulate_sum(delta, load, runnable, running) != 0
     }
-
+    /// 累积负载总和
     pub fn accumulate_sum(
         &mut self,
         mut delta: u64,
@@ -116,7 +116,7 @@ impl SchedulerAvg {
 
         return periods;
     }
-
+    /// 衰减负载
     fn decay_load(mut val: u64, n: u64) -> u64 {
         if unlikely(n > LOAD_AVG_PERIOD) {
             return 0;
@@ -131,7 +131,7 @@ impl SchedulerAvg {
 
         ((val as i128 * RUNNABLE_AVG_Y_N_INV[local_n as usize] as i128) >> 32) as u64
     }
-
+    /// 累积 PELT 段
     fn accumulate_pelt_segments(periods: u64, d1: u32, d3: u32) -> u32 {
         /* y^0 == 1 */
         let c3 = d3;
@@ -154,7 +154,7 @@ impl SchedulerAvg {
 
         return c1 + c2 + c3;
     }
-
+    /// 更新负载平均值
     pub fn update_load_avg(&mut self, load: u64) {
         let divider = self.get_pelt_divider();
 

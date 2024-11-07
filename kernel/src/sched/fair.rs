@@ -60,7 +60,7 @@ pub struct FairSchedEntity {
     pub slice: u64,
     /// 上一个调度实体运行总时间
     pub prev_sum_exec_runtime: u64,
-
+    /// PELT 算法跟踪的该调度实体的平均负载和平均利用率
     pub avg: SchedulerAvg,
 
     /// 父节点
@@ -342,7 +342,7 @@ pub struct CfsRunQueue {
     avg_vruntime: i64,
 
     last_update_time_copy: u64,
-
+    /// PELT 算法跟踪的该 cfsrq 的平均负载和平均利用率
     pub avg: SchedulerAvg,
 
     rq: Weak<CpuRunQueue>,

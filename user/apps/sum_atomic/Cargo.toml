@@ -1,0 +1,10 @@
+[package]
+name = "sum_atomic"
+version = "0.1.0"
+edition = "2021"
+description = "Testing multi-core scheduling performance"
+authors = [ "val213 <1042594899@qq.com>" ]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
