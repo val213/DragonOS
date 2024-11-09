@@ -259,6 +259,7 @@ impl FairSchedEntity {
     }
 
     /// 更新task和其cfsrq的负载均值
+    /// 将 sched_entity 的负载更新传播到更高层的调度队列中，确保整个调度结构的负载平均值是同步的
     pub fn propagate_entity_load_avg(&mut self) -> bool {
         if self.is_task() {
             return false;
@@ -856,16 +857,25 @@ impl CfsRunQueue {
         decayed |= se.force_mut().propagate_entity_load_avg() as u32;
 
         if se.avg.last_update_time > 0 && flags.contains(UpdateAvgFlags::DO_ATTACH) {
-            todo!()
+            // 新任务或迁移后任务入队
+            self.attach_entity_load_avg(se);
         } else if flags.contains(UpdateAvgFlags::DO_ATTACH) {
+            // 任务迁移出当前队列
             self.detach_entity_load_avg(se);
         } else if decayed > 0 {
-            // cfs_rq_util_change
-
+            // 如果任务和调度队列的负载值发生衰减，执行相应更新：
+            // 此函数通知CFS调度器当前 cfs_rq 的负载发生变化，确保调度决策能够反映最新的负载数据
+            // cfs_rq_util_change(cfs_rq, 0);
+            //  if (flags & UPDATE_TG)
+                // 当标志中包含 UPDATE_TG 时，update_tg_load_avg() 会更新整个任务组的负载平均值。
+                // update_tg_load_avg(cfs_rq);
             todo!()
         }
     }
-
+    /// 将实体的负载均值与对应cfs连接
+    fn attach_entity_load_avg(&mut self, se: &Arc<FairSchedEntity>) {
+        todo!()
+    }
     /// 将实体的负载均值与对应cfs分离
     fn detach_entity_load_avg(&mut self, se: &Arc<FairSchedEntity>) {
         self.dequeue_load_avg(se);
@@ -890,7 +900,7 @@ impl CfsRunQueue {
         self.propagate = 1;
         self.prop_runnable_sum += se.avg.load_sum as isize;
     }
-
+    /// 用于更新 cfs_rq 的负载平均值，它会检查是否需要根据时间衰减整个调度队列的负载
     fn update_self_load_avg(&mut self, now: u64) -> u32 {
         let mut removed_load = 0;
         let mut removed_util = 0;

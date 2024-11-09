@@ -202,6 +202,7 @@ impl CpuRunQueue {
 }
 
 impl CfsRunQueue {
+    /// 用于获取当前的PELT时间。PELT时间为负载追踪提供了时间基准，用于后续计算负载的衰减和更新
     pub fn cfs_rq_clock_pelt(&self) -> u64 {
         if unlikely(self.throttled_count > 0) {
             return self.throttled_clock_pelt - self.throttled_clock_pelt_time;

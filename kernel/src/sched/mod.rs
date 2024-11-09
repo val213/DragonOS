@@ -21,20 +21,13 @@ use alloc::{
 use system_error::SystemError;
 
 use crate::{
-    arch::{interrupt::ipi::send_ipi, CurrentIrqArch},
-    exception::{
+    arch::{interrupt::ipi::send_ipi, CurrentIrqArch}, driver::serial::serial8250::send_to_default_serial8250_port, exception::{
         ipi::{IpiKind, IpiTarget},
         InterruptArch,
-    },
-    libs::{
+    }, libs::{
         lazy_init::Lazy,
         spinlock::{SpinLock, SpinLockGuard},
-    },
-    mm::percpu::{PerCpu, PerCpuVar},
-    process::{ProcessControlBlock, ProcessFlags, ProcessManager, ProcessState, SchedInfo},
-    sched::idle::IdleScheduler,
-    smp::{core::smp_get_processor_id, cpu::ProcessorId},
-    time::{clocksource::HZ, timer::clock},
+    }, mm::percpu::{PerCpu, PerCpuVar}, process::{ProcessControlBlock, ProcessFlags, ProcessManager, ProcessState, SchedInfo}, sched::idle::IdleScheduler, smp::{core::smp_get_processor_id, cpu::ProcessorId}, time::{clocksource::HZ, timer::clock}
 };
 
 use self::{

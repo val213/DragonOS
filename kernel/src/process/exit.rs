@@ -151,25 +151,39 @@ fn do_wait(kwo: &mut KernelWaitOption) -> Result<usize, SystemError> {
             // 等待任意子进程
             // todo: 这里有问题！如果正在for循环的过程中，子进程退出了，可能会导致父进程永远等待。
             let current_pcb = ProcessManager::current_pcb();
-            let rd_childen = current_pcb.children.read();
-            let irq_guard = unsafe { CurrentIrqArch::save_and_disable_irq() };
-            for pid in rd_childen.iter() {
+            let rd_children = current_pcb.children.read();
+            // log::debug!("Current process: {:?}", current_pcb.pid());
+            // log::debug!("Number of children: {}", rd_children.len());
+            for pid in rd_children.iter() {
+                log::debug!("Checking child process: {:?}", pid);
                 let pcb = ProcessManager::find(*pid).ok_or(SystemError::ECHILD)?;
+                let irq_guard = unsafe { CurrentIrqArch::save_and_disable_irq() };
                 let state = pcb.sched_info().inner_lock_read_irqsave().state();
+                // log::debug!("Child process state: {:?}", state);
                 if state.is_exited() {
                     kwo.ret_status = state.exit_code().unwrap() as i32;
+                    // log::debug!("Child process {:?} has exited with status: {}", pid, kwo.ret_status);
                     drop(pcb);
-                    unsafe { ProcessManager::release(*pid) };
+                    log::debug!("Dropped PCB");
+                    // unsafe { ProcessManager::release(*pid) };
+                    log::debug!("Released process");
+                    drop(irq_guard);
+                    log::debug!("Dropped IRQ guard");
+                    log::debug!("do_wait return");
                     return Ok((*pid).into());
                 } else {
+                    // log::debug!("Child process {:?} is not exited, putting current process to sleep", pid);
                     unsafe { pcb.wait_queue.sleep_without_schedule() };
                 }
+                drop(irq_guard);
             }
-            drop(irq_guard);
+            drop(rd_children);
+            // log::debug!("No child process has exited, scheduling...");
             schedule(SchedMode::SM_NONE);
+            // log::debug!("Woken up from sleep, checking children again");
         } else {
             // todo: 对于pgid的处理
-            warn!("kernel_wait4: currently not support {:?}", kwo.pid_type);
+            log::warn!("do_wait: currently not support {:?}", kwo.pid_type);
             return Err(SystemError::EINVAL);
         }
     }
