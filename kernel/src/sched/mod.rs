@@ -18,6 +18,7 @@ use alloc::{
     sync::{Arc, Weak},
     vec::Vec,
 };
+use num::Zero;
 use system_error::SystemError;
 
 use crate::{
@@ -319,6 +320,12 @@ pub struct CpuRunQueue {
     current: Weak<ProcessControlBlock>,
 
     idle: Weak<ProcessControlBlock>,
+
+    /// try to wake up a task on this CPU
+    /// 指示有任务被唤醒并且需要进行调度
+    ttwu_pending: usize,
+    /// 是否处于idle状态
+    idle_balance: bool,
 }
 
 impl CpuRunQueue {
@@ -345,6 +352,8 @@ impl CpuRunQueue {
             sched_info: SchedInfo::default(),
             current: Weak::new(),
             idle: Weak::new(),
+            ttwu_pending: 0,
+            idle_balance: true,
         }
     }
 
@@ -805,7 +814,9 @@ pub fn scheduler_tick() {
     rq.calculate_global_load_tick();
 
     drop(guard);
-    // TODO:处理负载均衡
+    // 处理负载均衡
+    rq.idle_balance = idle_cpu(cpu_idx);
+    // trigger_load_balance(rq);
 }
 
 /// ## 执行调度
@@ -991,4 +1002,26 @@ pub fn sched_init() {
 #[inline]
 pub fn send_resched_ipi(cpu: ProcessorId) {
     send_ipi(IpiKind::KickCpu, IpiTarget::Specified(cpu));
+}
+
+///
+///   idle_cpu - is a given CPU idle currently?
+///  * @cpu: the processor in question.
+/// *
+///  * Return: 1 if the CPU is currently idle. 0 otherwise.
+///  */
+fn idle_cpu(cpu_idx: usize) -> bool {
+    let rq = cpu_rq(cpu_idx);
+    if let (Some(current), Some(idle)) = (rq.current.upgrade(), rq.idle.upgrade()) {
+        if current.pid() != idle.pid() {
+            return false;
+        }
+    }
+    if rq.nr_running > 0 {
+        return false;
+    }
+    if !rq.ttwu_pending.is_zero() {
+        return false;
+    }
+    return true;
 }
