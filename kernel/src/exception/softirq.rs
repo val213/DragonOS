@@ -37,9 +37,7 @@ pub extern "C" fn rs_softirq_init() {
 pub fn softirq_init() -> Result<(), SystemError> {
     info!("Initializing softirq...");
     unsafe {
-        if __SORTIRQ_VECTORS.is_null() {
-            __SORTIRQ_VECTORS = Box::leak(Box::new(Softirq::new()));
-        }
+        __SORTIRQ_VECTORS = Box::leak(Box::new(Softirq::new()));
         __CPU_PENDING = Some(Box::new(
             [VecStatus::default(); PerCpu::MAX_CPU_NUM as usize],
         ));
@@ -55,9 +53,6 @@ pub fn softirq_init() -> Result<(), SystemError> {
 #[inline(always)]
 pub fn softirq_vectors() -> &'static mut Softirq {
     unsafe {
-        if __SORTIRQ_VECTORS.is_null() {
-            __SORTIRQ_VECTORS = Box::leak(Box::new(Softirq::new()));
-        }
         return __SORTIRQ_VECTORS.as_mut().unwrap();
     }
 }

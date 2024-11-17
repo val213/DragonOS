@@ -8,7 +8,7 @@ pub mod prio;
 pub mod syscall;
 pub mod sd;
 pub mod sd_flags;
-
+pub mod balance;
 use core::{
     intrinsics::{likely, unlikely},
     sync::atomic::{compiler_fence, fence, AtomicUsize, Ordering},
@@ -24,11 +24,12 @@ use fair::DoRebalanceSoftirq;
 use num::Zero;
 use sd::SchedDomain;
 use system_error::SystemError;
+use unified_init::macros::unified_init;
 
 use crate::{
     arch::{interrupt::ipi::send_ipi, CurrentIrqArch}, exception::{
         ipi::{IpiKind, IpiTarget}, softirq::{softirq_vectors, SoftirqNumber}, InterruptArch
-    }, libs::{
+    }, init::initcall::INITCALL_SUBSYS, libs::{
         cpumask::CpuMask, lazy_init::Lazy, spinlock::{SpinLock, SpinLockGuard}
     }, mm::percpu::{PerCpu, PerCpuVar}, process::{ProcessControlBlock, ProcessFlags, ProcessManager, ProcessState, SchedInfo}, sched::idle::IdleScheduler, smp::{core::smp_get_processor_id, cpu::ProcessorId}, time::{clocksource::HZ, timer::clock}
 };
@@ -994,7 +995,7 @@ fn __set_task_cpu(pcb: &Arc<ProcessControlBlock>, cpu: ProcessorId) {
 }
 
 #[inline(never)]
-pub fn sched_init() {
+pub fn sched_init(){
     // 初始化percpu变量
     unsafe {
         CPU_IRQ_TIME = Some(Vec::with_capacity(PerCpu::MAX_CPU_NUM as usize));
@@ -1020,12 +1021,6 @@ pub fn sched_init() {
         
         LOAD_BALANCE_MASK.init(PerCpuVar::new(load_balance_mask).unwrap());
     };
-
-    // 注册多核负载均衡的软中断
-    let sched_softirq = Arc::new(DoRebalanceSoftirq::new());
-    softirq_vectors().register_softirq(SoftirqNumber::SCHED, sched_softirq)
-    .expect("Failed to register rebalance softirq");
-    log::info!("rebalance initialized successfully");
 }
 
 #[inline]
