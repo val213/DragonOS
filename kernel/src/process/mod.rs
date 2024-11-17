@@ -1274,7 +1274,7 @@ impl InnerSchedInfo {
 impl ProcessSchedulerInfo {
     #[inline(never)]
     pub fn new(on_cpu: Option<ProcessorId>) -> Self {
-        let cpu_id = on_cpu.unwrap_or(ProcessorId::INVALID);
+        let cpu_id: ProcessorId = on_cpu.unwrap_or(ProcessorId::INVALID);
         return Self {
             on_cpu: AtomicProcessorId::new(cpu_id),
             // migrate_to: AtomicProcessorId::new(ProcessorId::INVALID),

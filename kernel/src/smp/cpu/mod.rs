@@ -76,6 +76,8 @@ pub struct SmpCpuManager {
     possible_cpus: CpuMask,
     /// 出现的CPU
     present_cpus: CpuMask,
+    /// 活跃的CPU
+    active_cpus: CpuMask,
     /// 出现在系统中的CPU的数量
     present_cnt: AtomicU32,
     /// 可用的CPU的数量
@@ -88,6 +90,7 @@ impl SmpCpuManager {
     fn new() -> Self {
         let possible_cpus = CpuMask::new();
         let present_cpus = CpuMask::new();
+        let active_cpus = CpuMask::new();
         let mut data = Vec::with_capacity(PerCpu::MAX_CPU_NUM as usize);
         for i in 0..PerCpu::MAX_CPU_NUM {
             let mut hpstate = CpuHpCpuState::new();
@@ -99,6 +102,7 @@ impl SmpCpuManager {
         Self {
             possible_cpus,
             present_cpus,
+            active_cpus,
             cpuhp_state,
             present_cnt: AtomicU32::new(0),
             possible_cnt: AtomicU32::new(0),
@@ -137,7 +141,10 @@ impl SmpCpuManager {
     pub fn possible_cpus_count(&self) -> u32 {
         self.possible_cnt.load(core::sync::atomic::Ordering::SeqCst)
     }
-
+    /// 获取活跃的CPU
+    pub fn active_cpus(&self) -> &CpuMask {
+        &self.active_cpus
+    }
     pub fn present_cpus_count(&self) -> u32 {
         self.present_cnt.load(core::sync::atomic::Ordering::SeqCst)
     }

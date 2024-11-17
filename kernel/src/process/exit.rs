@@ -165,7 +165,7 @@ fn do_wait(kwo: &mut KernelWaitOption) -> Result<usize, SystemError> {
                     // log::debug!("Child process {:?} has exited with status: {}", pid, kwo.ret_status);
                     drop(pcb);
                     log::debug!("Dropped PCB");
-                    // unsafe { ProcessManager::release(*pid) };
+                    unsafe { ProcessManager::release(*pid) };
                     log::debug!("Released process");
                     drop(irq_guard);
                     log::debug!("Dropped IRQ guard");

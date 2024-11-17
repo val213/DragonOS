@@ -105,6 +105,11 @@ impl CpuMask {
     pub fn bitand_assign(&mut self, rhs: &CpuMask) {
         self.bmp.bitand_assign(&rhs.bmp);
     }
+    /// 按位与
+    pub fn bitand(&self, rhs: &CpuMask) -> CpuMask {
+        let bmp = (&self.bmp & &rhs.bmp).clone();
+        CpuMask { bmp }
+    }
 }
 
 impl BitAnd for &CpuMask {

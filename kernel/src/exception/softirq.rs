@@ -72,6 +72,7 @@ pub enum SoftirqNumber {
     /// 时钟软中断信号
     TIMER = 0,
     VideoRefresh = 1, //帧缓冲区刷新软中断
+    SCHED = 2,
 }
 
 impl From<u64> for SoftirqNumber {
@@ -85,6 +86,7 @@ bitflags! {
     pub struct VecStatus: u64 {
         const TIMER = 1 << 0;
         const VIDEO_REFRESH = 1 << 1;
+        const SCHED = 1 << 2;
     }
 }
 

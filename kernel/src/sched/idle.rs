@@ -65,3 +65,14 @@ impl Scheduler for IdleScheduler {
         // Nothing todo
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CpuIdleType {
+    Idle,
+    NotIdle,
+    NewlyIdle,
+}
+
+impl CpuIdleType {
+    pub const MAX_IDLE_TYPES: usize = 3;
+}

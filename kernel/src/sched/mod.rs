@@ -6,6 +6,8 @@ pub mod idle;
 pub mod pelt;
 pub mod prio;
 pub mod syscall;
+pub mod sd;
+pub mod sd_flags;
 
 use core::{
     intrinsics::{likely, unlikely},
@@ -18,16 +20,16 @@ use alloc::{
     sync::{Arc, Weak},
     vec::Vec,
 };
+use fair::DoRebalanceSoftirq;
 use num::Zero;
+use sd::SchedDomain;
 use system_error::SystemError;
 
 use crate::{
-    arch::{interrupt::ipi::send_ipi, CurrentIrqArch}, driver::serial::serial8250::send_to_default_serial8250_port, exception::{
-        ipi::{IpiKind, IpiTarget},
-        InterruptArch,
+    arch::{interrupt::ipi::send_ipi, CurrentIrqArch}, exception::{
+        ipi::{IpiKind, IpiTarget}, softirq::{softirq_vectors, SoftirqNumber}, InterruptArch
     }, libs::{
-        lazy_init::Lazy,
-        spinlock::{SpinLock, SpinLockGuard},
+        cpumask::CpuMask, lazy_init::Lazy, spinlock::{SpinLock, SpinLockGuard}
     }, mm::percpu::{PerCpu, PerCpuVar}, process::{ProcessControlBlock, ProcessFlags, ProcessManager, ProcessState, SchedInfo}, sched::idle::IdleScheduler, smp::{core::smp_get_processor_id, cpu::ProcessorId}, time::{clocksource::HZ, timer::clock}
 };
 
@@ -42,7 +44,8 @@ static mut CPU_IRQ_TIME: Option<Vec<&'static mut IrqTime>> = None;
 
 // 这里虽然rq是percpu的，但是在负载均衡的时候需要修改对端cpu的rq，所以仍需加锁
 static CPU_RUNQUEUE: Lazy<PerCpuVar<Arc<CpuRunQueue>>> = PerCpuVar::define_lazy();
-
+/// 当前 CPU 上的负载均衡掩码
+static LOAD_BALANCE_MASK: Lazy<PerCpuVar<Arc<CpuMask>>> = PerCpuVar::define_lazy();
 /// 用于记录系统中所有 CPU 的可执行进程数量的总和。
 static CALCULATE_LOAD_TASKS: AtomicUsize = AtomicUsize::new(0);
 
@@ -326,6 +329,8 @@ pub struct CpuRunQueue {
     ttwu_pending: usize,
     /// 是否处于idle状态
     idle_balance: bool,
+
+    sd: Arc<SchedDomain>,
 }
 
 impl CpuRunQueue {
@@ -354,6 +359,7 @@ impl CpuRunQueue {
             idle: Weak::new(),
             ttwu_pending: 0,
             idle_balance: true,
+            sd: Arc::new(SchedDomain::new(CpuMask::new())),
         }
     }
 
@@ -689,6 +695,15 @@ impl CpuRunQueue {
 
         todo!()
     }
+    fn trigger_load_balance(&self) {
+        // 当前 rq 是否附属于一个空调度域
+        // 检查当前运行队列所属的 CPU 是否处于活跃状态
+        // 检查是否到达负载均衡的时间
+        if self.clock >= self.next_balance {
+            softirq_vectors().raise_softirq(SoftirqNumber::SCHED);
+        }
+        // TODO: nohz
+    }
 }
 
 bitflags! {
@@ -816,7 +831,7 @@ pub fn scheduler_tick() {
     drop(guard);
     // 处理负载均衡
     rq.idle_balance = idle_cpu(cpu_idx);
-    // trigger_load_balance(rq);
+    rq.trigger_load_balance();
 }
 
 /// ## 执行调度
@@ -996,7 +1011,21 @@ pub fn sched_init() {
         }
 
         CPU_RUNQUEUE.init(PerCpuVar::new(cpu_runqueue).unwrap());
+
+        let mut load_balance_mask = Vec::with_capacity(PerCpu::MAX_CPU_NUM as usize);
+        for _ in 0..PerCpu::MAX_CPU_NUM as usize {
+            let cpumasks = Arc::new(CpuMask::new());
+            load_balance_mask.push(cpumasks);
+        }
+        
+        LOAD_BALANCE_MASK.init(PerCpuVar::new(load_balance_mask).unwrap());
     };
+
+    // 注册多核负载均衡的软中断
+    let sched_softirq = Arc::new(DoRebalanceSoftirq::new());
+    softirq_vectors().register_softirq(SoftirqNumber::SCHED, sched_softirq)
+    .expect("Failed to register rebalance softirq");
+    log::info!("rebalance initialized successfully");
 }
 
 #[inline]

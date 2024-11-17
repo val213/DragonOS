@@ -2,8 +2,10 @@ use core::intrinsics::likely;
 use core::intrinsics::unlikely;
 use core::mem::swap;
 use core::sync::atomic::fence;
+use core::sync::atomic::AtomicBool;
 use core::sync::atomic::{AtomicU64, Ordering};
-
+use crate::exception::softirq::SoftirqVec;
+use crate::libs::cpumask::CpuMask;
 use crate::libs::rbtree::RBTree;
 use crate::libs::spinlock::SpinLock;
 use crate::process::ProcessControlBlock;
@@ -11,6 +13,8 @@ use crate::process::ProcessFlags;
 use crate::sched::clock::ClockUpdataFlag;
 use crate::sched::{cpu_rq, SchedFeature, SCHED_FEATURES};
 use crate::smp::core::smp_get_processor_id;
+use crate::smp::cpu::smp_cpu_manager;
+use crate::smp::cpu::ProcessorId;
 use crate::time::jiffies::TICK_NESC;
 use crate::time::timer::clock;
 use crate::time::NSEC_PER_MSEC;
@@ -18,6 +22,9 @@ use alloc::sync::{Arc, Weak};
 
 use super::idle::IdleScheduler;
 use super::pelt::{add_positive, sub_positive, SchedulerAvg, UpdateAvgFlags, PELT_MIN_DIVIDER};
+use super::sd::SchedDomain;
+use super::sd::SchedGroup;
+use super::LOAD_BALANCE_MASK;
 use super::{
     CpuRunQueue, DequeueFlag, EnqueueFlag, LoadWeight, OnRq, SchedPolicy, Scheduler, TaskGroup,
     WakeupFlags, SCHED_CAPACITY_SHIFT,
@@ -1819,5 +1826,216 @@ impl Scheduler for CompletelyFairScheduler {
 
             return (true, true);
         });
+    }
+}
+#[derive(Debug)]
+pub struct DoRebalanceSoftirq {
+    running: AtomicBool,
+}
+impl DoRebalanceSoftirq {
+    pub fn new() -> Self {
+        Self {
+            running: AtomicBool::new(false),
+        }
+    }
+}
+
+impl SoftirqVec for DoRebalanceSoftirq {
+    fn run(&self) {
+        if self.running.load(Ordering::SeqCst) {
+            return;
+        }
+
+        self.running.store(true, Ordering::SeqCst);
+        
+        run_rebalance_domains();
+
+        self.running.store(false, Ordering::SeqCst);
+    }
+}
+
+/// 注册为软中断执行的函数
+fn run_rebalance_domains() {
+    let this_rq = cpu_rq(smp_get_processor_id().data() as usize);
+    let idle = this_rq.idle_balance;
+    // update_blocked_averages(this_rq.cpu);
+    rebalance_domains(this_rq, idle);
+}
+
+fn rebalance_domains(rq: Arc<CpuRunQueue>, idle: bool) {
+    let cpu_idx = rq.cpu;
+    let continue_balancing = true;
+    let mut sd = cpu_rq(cpu_idx).sd.clone();
+    let need_decay = false;
+    // 跟踪当前 CPU 平衡任务的最大成本
+    let mut max_count = 0;
+    // 从当前的调度域开始，从底层到高层遍历所有的调度域
+    loop {
+        // 衰减调度域的 max_newidle_lb_cost
+        // need_decay = update_newidle_cost(rq.clone(), sd.clone(), idle);
+        {
+            let (sd_mut, _sd_guard) = sd.self_lock();
+            max_count += sd_mut.max_newidle_lb_cost();
+        }
+        // 提前停止负载均衡
+        if continue_balancing {
+            if need_decay {
+                continue;
+            }
+            break;
+        }
+        // let interval = get_sd_balance_interval(sd, !idle);
+
+        load_balance(cpu_idx, rq.clone(), sd.clone(), idle, continue_balancing);
+
+        // 如果parent不为空，继续向上遍历
+        let parent_sd = {
+            let (sd_mut, _sd_guard) = sd.self_lock();
+            if sd_mut.parent().is_none() {
+                break;
+            } else {
+                sd_mut.parent().unwrap().clone()
+            }
+        };
+        sd = parent_sd;
+    }
+}
+
+/// 调度域内的负载均衡的具体实现
+fn load_balance(cpu:usize, rq:Arc<CpuRunQueue>, sd: Arc<SchedDomain>, idle:bool, mut continue_balancing:bool){
+    // 累计迁移的任务负载
+    let mut ld_moved = 0;
+    // 本次迭代中迁移的任务负载
+    let mut cur_ld_moved = 0;
+    let active_balance = 0;
+    // let sd_parent = sd.parent();
+    let group: Option<Arc<SchedGroup>>;
+    let busiest: Option<Arc<CpuRunQueue>>;
+    // 将当前 CPU 的 per-CPU 变量 LOAD_BALANCE_MASK 的地址赋值给 cpus
+    let cpus: Arc<CpuMask> = unsafe {LOAD_BALANCE_MASK
+            .get()
+            .force_get(ProcessorId::new(cpu as u32))
+            .clone()
+    };
+
+    let mut env = LbEnv{
+        sd: sd.clone(),
+        src_rq: rq.clone(),
+        dst_rq: rq.clone(),
+        src_cpu: cpu,
+        dst_cpu: cpu,
+        dst_group_mask: CpuMask::new(),
+        new_dst_cpu: cpu,
+        idle,
+        cpus,
+        flags: 0,
+    };
+    
+    {   
+        // 环境变量中记录所有既活跃又属于调度域 sd 的 CPU
+        let (sd_mut, _sd_guard) = sd.self_lock();
+        env.cpus.bitand(&sd_mut.span()).bitand(&smp_cpu_manager().active_cpus());
+        // 递增对应类型负载均衡的次数
+        sd_mut.lb_count[idle as usize] += 1;
+    }
+    loop {
+        if !env.should_we_balance() {
+            continue_balancing = false;
+            break;
+        }
+
+        group = env.find_busiest_group();
+        if group.is_none() {
+            let (sd_mut, _sd_guard) = sd.self_lock();
+            sd_mut.lb_nobusyq[idle as usize] += 1;
+            break;
+        }
+
+        busiest = env.find_busiest_queue();
+        if busiest.is_none() {
+            let (sd_mut, _sd_guard) = sd.self_lock();
+            sd_mut.lb_nobusyq[idle as usize] += 1;
+            break;
+        }
+
+        let busiest = busiest.unwrap();
+        assert!(!Arc::ptr_eq(&busiest, &env.dst_rq));
+
+        {
+            let (sd_mut, _sd_guard) = sd.self_lock();
+            sd_mut.lb_imbalance[idle as usize] += env.flags;
+        }
+
+        env.src_cpu = busiest.cpu;
+        env.src_rq = busiest.clone();
+
+        ld_moved = 0;
+        env.flags |= 1; // LBF_ALL_PINNED
+        if busiest.nr_running > 1 {
+            loop {
+                // Simplified task detachment and attachment logic
+                cur_ld_moved = 1; // Assume one task moved for simplicity
+
+                if cur_ld_moved > 0 {
+                    ld_moved += cur_ld_moved;
+                }
+
+                if env.flags & 2 != 0 { // LBF_NEED_BREAK
+                    env.flags &= !2;
+                    if ld_moved < busiest.nr_running {
+                        continue;
+                    }
+                }
+
+                break;
+            }
+        }
+
+        if ld_moved == 0 {
+            let (sd_mut, _sd_guard) = sd.self_lock();
+            sd_mut.lb_failed[idle as usize] += 1;
+            if idle != true {
+                sd_mut.nr_balance_failed += 1;
+            }
+        } else {
+            let (sd_mut, _sd_guard) = sd.self_lock();
+            sd_mut.nr_balance_failed = 0;
+        }
+
+        break;
+    }
+
+    {
+        let (sd_mut, _sd_guard) = sd.self_lock();
+        sd_mut.lb_balanced[idle as usize] += 1;
+    }
+}
+/// 封装负载均衡的上下文信息
+#[derive(Debug)]
+#[allow(dead_code)]
+struct LbEnv{
+    sd: Arc<SchedDomain>,
+    src_rq: Arc<CpuRunQueue>,
+    dst_rq: Arc<CpuRunQueue>,
+    src_cpu: usize,
+    dst_cpu: usize,
+    dst_group_mask: CpuMask,
+    new_dst_cpu: usize,
+    idle: bool,
+    cpus: Arc<CpuMask>,
+    flags: u32,
+}
+impl LbEnv {
+    fn should_we_balance(&self) -> bool {
+        // Simplified logic for determining if we should balance
+        true
+    }
+
+    fn find_busiest_group(&self) -> Option<Arc<SchedGroup>> {
+        todo!()
+    }
+
+    fn find_busiest_queue(&self) -> Option<Arc<CpuRunQueue>> {
+        todo!()
     }
 }
