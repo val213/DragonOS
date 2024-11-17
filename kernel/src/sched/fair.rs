@@ -10,6 +10,8 @@ use crate::libs::rbtree::RBTree;
 use crate::libs::spinlock::SpinLock;
 use crate::process::ProcessControlBlock;
 use crate::process::ProcessFlags;
+use crate::sched::balance::LBF_ALL_PINNED;
+use crate::sched::balance::LBF_NEED_BREAK;
 use crate::sched::clock::ClockUpdataFlag;
 use crate::sched::{cpu_rq, SchedFeature, SCHED_FEATURES};
 use crate::smp::core::smp_get_processor_id;
@@ -1854,7 +1856,7 @@ impl SoftirqVec for DoRebalanceSoftirq {
     }
 }
 
-/// 注册为软中断执行的函数
+/// 触发负载均衡后软中断执行的函数
 fn run_rebalance_domains() {
     let this_rq = cpu_rq(smp_get_processor_id().data() as usize);
     let idle = this_rq.idle_balance;
@@ -1902,7 +1904,17 @@ fn rebalance_domains(rq: Arc<CpuRunQueue>, idle: bool) {
 }
 
 /// 调度域内的负载均衡的具体实现
+/// 
+/// ## 参数:
+/// - `this_cpu`: 本次要进行负载均衡的CPU。需要注意的是：对于 new idle balance 和 tick balance 而言，this_cpu 等于 current cpu，在 nohz idle balance 场景中，this_cpu 未必等于 current cpu.
+/// - `this_rq`: 本次负载均衡 CPU 对应的 runqueue
+/// - `sd`: 本次均衡的范围，即本次均衡要保证该 sched domain 上各个 group 处于负载平衡状态.
+/// - `idle`: this_cpu 在发起均衡的时候所处的状态，通过这个状态可以识别 new idle load balance 和 tick balance.
+/// - `continue_balancing`: 负载均衡是从发起 CPU 的 base domain 开始，不断向上，直到顶层的 sched domain. continue_balancing 是用来控制是否继续进行上层 sched domain 的均衡.
+///
+/// ## 返回值: 本次负载均衡迁移的任务总数
 fn load_balance(cpu:usize, rq:Arc<CpuRunQueue>, sd: Arc<SchedDomain>, idle:bool, mut continue_balancing:bool){
+    log::info!("load_balance");
     // 累计迁移的任务负载
     let mut ld_moved = 0;
     // 本次迭代中迁移的任务负载
@@ -1917,7 +1929,7 @@ fn load_balance(cpu:usize, rq:Arc<CpuRunQueue>, sd: Arc<SchedDomain>, idle:bool,
             .force_get(ProcessorId::new(cpu as u32))
             .clone()
     };
-
+    // 初始化本次负载均衡的上下文信息
     let mut env = LbEnv{
         sd: sd.clone(),
         src_rq: rq.clone(),
@@ -1939,6 +1951,7 @@ fn load_balance(cpu:usize, rq:Arc<CpuRunQueue>, sd: Arc<SchedDomain>, idle:bool,
         sd_mut.lb_count[idle as usize] += 1;
     }
     loop {
+        // 判断这个 CPU 是否适合做指定 sched domain 的均衡
         if !env.should_we_balance() {
             continue_balancing = false;
             break;
@@ -1970,17 +1983,19 @@ fn load_balance(cpu:usize, rq:Arc<CpuRunQueue>, sd: Arc<SchedDomain>, idle:bool,
         env.src_rq = busiest.clone();
 
         ld_moved = 0;
-        env.flags |= 1; // LBF_ALL_PINNED
+        // 在拉取任务之前，先设定 all pinned 标志
+        env.flags |= LBF_ALL_PINNED;
         if busiest.nr_running > 1 {
             loop {
-                // Simplified task detachment and attachment logic
-                cur_ld_moved = 1; // Assume one task moved for simplicity
+                // 假设每次循环中有一个任务被移动
+                cur_ld_moved = 1;
 
                 if cur_ld_moved > 0 {
                     ld_moved += cur_ld_moved;
                 }
 
-                if env.flags & 2 != 0 { // LBF_NEED_BREAK
+                // 检查是否需要继续循环··
+                if env.flags & LBF_NEED_BREAK != 0 {
                     env.flags &= !2;
                     if ld_moved < busiest.nr_running {
                         continue;
@@ -1990,7 +2005,7 @@ fn load_balance(cpu:usize, rq:Arc<CpuRunQueue>, sd: Arc<SchedDomain>, idle:bool,
                 break;
             }
         }
-
+        // 检查是否有任务被移动
         if ld_moved == 0 {
             let (sd_mut, _sd_guard) = sd.self_lock();
             sd_mut.lb_failed[idle as usize] += 1;
@@ -2004,7 +2019,7 @@ fn load_balance(cpu:usize, rq:Arc<CpuRunQueue>, sd: Arc<SchedDomain>, idle:bool,
 
         break;
     }
-
+    // 更新 lb_balanced 计数器
     {
         let (sd_mut, _sd_guard) = sd.self_lock();
         sd_mut.lb_balanced[idle as usize] += 1;
