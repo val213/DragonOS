@@ -26,6 +26,16 @@ impl AllocBitmap {
             self.data[i] &= rhs.data[i];
         }
     }
+
+    /// 检查 `self` 是否是 `other` 的子集
+    pub fn is_subset_of(&self, other: &Self) -> bool {
+        for (i, &self_data) in self.data.iter().enumerate() {
+            if self_data & !other.data[i] != 0 {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 impl BitMapOps<usize> for AllocBitmap {

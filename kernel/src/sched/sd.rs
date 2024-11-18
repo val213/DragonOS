@@ -68,6 +68,9 @@ impl SchedDomain {
         &self.span
     }
 
+    pub fn groups(&self) -> &Vec<Arc<SchedGroup>> {
+        &self.groups
+    }
     pub fn max_newidle_lb_cost(&self) -> u32 {
         self.max_newidle_lb_cost
     }
@@ -114,12 +117,14 @@ impl SchedDomain {
 pub struct SchedGroup {
     next: Option<Arc<SchedGroup>>,
     cpumask: CpuMask,
+    sgc: SchedGroupCapacity,
 }
 impl SchedGroup {
     pub fn new(cpumask: CpuMask) -> Self {
         Self {
             next: None,
             cpumask,
+            sgc: SchedGroupCapacity::new(),
         }
     }
 
@@ -135,4 +140,37 @@ impl SchedGroup {
         &self.cpumask
     }
     
+    pub fn sgc(&self) -> &SchedGroupCapacity {
+        &self.sgc
+    }
+}
+
+#[derive(Debug)]
+pub struct SchedGroupCapacity {
+    /// CPU capacity of this group, SCHED_CAPACITY_SCALE being max capacity for a single CPU
+    capacity: u64,
+    min_capacity: u64,
+    max_capacity: u64,
+    next_update: u64,
+    imbalance: i32,
+    id: i32,
+    cpumask: CpuMask,
+}
+
+impl SchedGroupCapacity {
+    pub fn new() -> Self {
+        Self {
+            capacity: 0,
+            min_capacity: 0,
+            max_capacity: 0,
+            next_update: 0,
+            imbalance: 0,
+            id: 0,
+            cpumask: CpuMask::new(),
+        }
+    }
+
+    pub fn imbalance(&self) -> i32 {
+        self.imbalance
+    }
 }

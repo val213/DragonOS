@@ -110,6 +110,16 @@ impl CpuMask {
         let bmp = (&self.bmp & &rhs.bmp).clone();
         CpuMask { bmp }
     }
+
+    /// 清除指定 CPU 的位
+    pub fn clear_cpu(&mut self, cpu: ProcessorId) {
+        self.set(cpu, false);
+    }
+
+    /// 检查 `self` 是否是 `other` 的子集
+    pub fn cpumask_subset(&self, other: &CpuMask) -> bool {
+        self.bmp.is_subset_of(&other.bmp)
+    }
 }
 
 impl BitAnd for &CpuMask {

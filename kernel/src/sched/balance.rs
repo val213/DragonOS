@@ -18,3 +18,6 @@ pub const LBF_NEED_BREAK: u32 = 0x02;
 pub const LBF_DST_PINNED: u32 = 0x04;
 pub const LBF_SOME_PINNED: u32 = 0x08;
 pub const LBF_ACTIVE_LB: u32 = 0x10;
+
+pub const SYSCTL_SCHED_NR_MIGRATE: u32 = 32;
+pub const SCHED_NR_MIGRATE_BREAK: u32 = 8;

@@ -76,6 +76,16 @@ pub fn cpu_rq(cpu: usize) -> Arc<CpuRunQueue> {
     }
 }
 
+#[inline]
+pub fn cpu_mask(cpu: usize) -> Arc<CpuMask> {
+    LOAD_BALANCE_MASK.ensure();
+    unsafe {
+        LOAD_BALANCE_MASK
+            .get()
+            .force_get(ProcessorId::new(cpu as u32))
+            .clone()
+    }
+}
 lazy_static! {
     pub static ref SCHED_FEATURES: SchedFeature = SchedFeature::GENTLE_FAIR_SLEEPERS
         | SchedFeature::START_DEBIT

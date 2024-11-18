@@ -1,3 +1,4 @@
+use core::cmp::min;
 use core::intrinsics::likely;
 use core::intrinsics::unlikely;
 use core::mem::swap;
@@ -11,8 +12,13 @@ use crate::libs::spinlock::SpinLock;
 use crate::process::ProcessControlBlock;
 use crate::process::ProcessFlags;
 use crate::sched::balance::LBF_ALL_PINNED;
+use crate::sched::balance::LBF_DST_PINNED;
 use crate::sched::balance::LBF_NEED_BREAK;
+use crate::sched::balance::LBF_SOME_PINNED;
+use crate::sched::balance::SCHED_NR_MIGRATE_BREAK;
+use crate::sched::balance::SYSCTL_SCHED_NR_MIGRATE;
 use crate::sched::clock::ClockUpdataFlag;
+use crate::sched::cpu_mask;
 use crate::sched::{cpu_rq, SchedFeature, SCHED_FEATURES};
 use crate::smp::core::smp_get_processor_id;
 use crate::smp::cpu::smp_cpu_manager;
@@ -1919,16 +1925,12 @@ fn load_balance(cpu:usize, rq:Arc<CpuRunQueue>, sd: Arc<SchedDomain>, idle:bool,
     let mut ld_moved = 0;
     // 本次迭代中迁移的任务负载
     let mut cur_ld_moved = 0;
-    let active_balance = 0;
-    // let sd_parent = sd.parent();
-    let group: Option<Arc<SchedGroup>>;
-    let busiest: Option<Arc<CpuRunQueue>>;
+    // let active_balance = 0;
+    let sd_parent = sd.parent();
+    let mut group: Option<Arc<SchedGroup>>;
+    let mut busiest: Option<Arc<CpuRunQueue>>;
     // 将当前 CPU 的 per-CPU 变量 LOAD_BALANCE_MASK 的地址赋值给 cpus
-    let cpus: Arc<CpuMask> = unsafe {LOAD_BALANCE_MASK
-            .get()
-            .force_get(ProcessorId::new(cpu as u32))
-            .clone()
-    };
+    let cpus = cpu_mask(cpu);
     // 初始化本次负载均衡的上下文信息
     let mut env = LbEnv{
         sd: sd.clone(),
@@ -1939,8 +1941,12 @@ fn load_balance(cpu:usize, rq:Arc<CpuRunQueue>, sd: Arc<SchedDomain>, idle:bool,
         dst_group_mask: CpuMask::new(),
         new_dst_cpu: cpu,
         idle,
-        cpus,
+        cpus: cpus.clone(),
         flags: 0,
+        loop_max: SYSCTL_SCHED_NR_MIGRATE,
+        imbalance: 0,
+        loop_times: 0,
+        loop_break: SCHED_NR_MIGRATE_BREAK,
     };
     
     {   
@@ -1956,14 +1962,14 @@ fn load_balance(cpu:usize, rq:Arc<CpuRunQueue>, sd: Arc<SchedDomain>, idle:bool,
             continue_balancing = false;
             break;
         }
-
+    
         group = env.find_busiest_group();
         if group.is_none() {
             let (sd_mut, _sd_guard) = sd.self_lock();
             sd_mut.lb_nobusyq[idle as usize] += 1;
             break;
         }
-
+    
         busiest = env.find_busiest_queue();
         if busiest.is_none() {
             let (sd_mut, _sd_guard) = sd.self_lock();
@@ -1971,48 +1977,98 @@ fn load_balance(cpu:usize, rq:Arc<CpuRunQueue>, sd: Arc<SchedDomain>, idle:bool,
             break;
         }
 
-        let busiest = busiest.unwrap();
-        assert!(!Arc::ptr_eq(&busiest, &env.dst_rq));
-
+        assert!(!Arc::ptr_eq(busiest.as_ref().unwrap(), &env.dst_rq));
         {
             let (sd_mut, _sd_guard) = sd.self_lock();
             sd_mut.lb_imbalance[idle as usize] += env.flags;
         }
-
-        env.src_cpu = busiest.cpu;
-        env.src_rq = busiest.clone();
-
+    
+        env.src_cpu = busiest.as_ref().unwrap().cpu;
+        env.src_rq = busiest.as_ref().unwrap().clone();
+        let busiest_rq = busiest.unwrap();
+        let (busiest, _busiest_guard) = busiest_rq.self_lock();
+    
         ld_moved = 0;
         // 在拉取任务之前，先设定 all pinned 标志
         env.flags |= LBF_ALL_PINNED;
+        env.loop_max = min(SYSCTL_SCHED_NR_MIGRATE, busiest.nr_running as u32);
+    
         if busiest.nr_running > 1 {
+            // more_balance，新一轮迁移不需要寻找 busiest cpu，只是继续扫描 busiest rq 上的任务列表，寻找适合迁移的任务
             loop {
-                // 假设每次循环中有一个任务被移动
-                cur_ld_moved = 1;
-
+                busiest.update_rq_clock();
+                // 从 busiest cpu 的 rq 中摘取适合的任务
+                // 由于关中断时长的问题，detach_tasks 也不会一次性把所有任务迁移到dest cpu上
+                cur_ld_moved = env.detach_tasks();
+    
                 if cur_ld_moved > 0 {
+                    // 将 detach_tasks 摘下的任务挂入到 src rq 上
+                    // 由于 detach_tasks、attach_tasks 会进行多轮，ld_moved 记录了总共迁移的任务数量，cur_ld_moved 是本轮迁移的任务数
+                    env.attach_tasks();
                     ld_moved += cur_ld_moved;
                 }
-
-                // 检查是否需要继续循环··
+    
+                // 检查是否需要继续循环
                 if env.flags & LBF_NEED_BREAK != 0 {
-                    env.flags &= !2;
+                    env.flags &= !LBF_NEED_BREAK;
                     if ld_moved < busiest.nr_running {
+                        // 在任务迁移过程中，src cpu的中断是关闭的，为了降低这个关中断时间，迁移大量任务的时候需要break一下
                         continue;
                     }
                 }
-
                 break;
             }
         }
+        // 至此已经对 dest rq 上的任务列表完成了 loop_max 次扫描，要看情况是否要发起下一轮次的均衡
+    
+        if (env.flags & LBF_DST_PINNED) != 0 && env.imbalance > 0 {
+            // 候选 CPU 集合中移除当前无法接受任务的目标 CPU
+            let mut cpus = (*env.cpus).clone();
+            cpus.clear_cpu(ProcessorId::new(env.dst_cpu as u32));
+            env.cpus = Arc::new(cpus);
+            env.dst_rq = cpu_rq(env.new_dst_cpu);
+            env.dst_cpu = env.new_dst_cpu;
+            env.flags &= !LBF_DST_PINNED;
+            env.loop_times = 0;
+            env.loop_break = SCHED_NR_MIGRATE_BREAK;
+            continue; // 相当于 goto more_balance
+        }
+    
+        if let Some(ref sd_parent) = sd_parent {
+            let group_imbalance = &mut sd_parent.groups()[0].sgc().imbalance();
+            if (env.flags & LBF_SOME_PINNED) != 0 && env.imbalance > 0 {
+                *group_imbalance = 1;
+            }
+        }
+    
+        if (env.flags & LBF_ALL_PINNED) != 0 {
+            // 如果当前最繁忙 CPU（busiest）已经被清除
+            let mut cpus_clone = (*env.cpus).clone();
+            cpus_clone.clear_cpu(ProcessorId::new(busiest.cpu as u32));
+            env.cpus = Arc::new(cpus_clone);
+            // 检查候选 CPU 集合是否仍包含可以进行任务迁移的目标组
+            if !cpus.cpumask_subset(&env.dst_group_mask) {
+                env.loop_times = 0;
+                env.loop_break = SCHED_NR_MIGRATE_BREAK;
+                // 如果选中的busiest cpu上的任务全部都是通过 affinity 锁定在了该cpu上，那么清除该 cpu（为了确保下轮均衡不考虑该cpu），再次发起均衡。
+                // 这种情况下，需要重新搜索source cpu，因此跳转到redo。
+                continue; // 相当于 goto redo
+            }
+            break; // 相当于 goto out_all_pinned
+        }
+
+        // 至此，source rq 上的 cfs 任务链表已经被遍历（也可能遍历多次），基本上对 runnable 任务的扫描已经到位了，如果不行就只能考虑 running task 了
         // 检查是否有任务被移动
         if ld_moved == 0 {
             let (sd_mut, _sd_guard) = sd.self_lock();
             sd_mut.lb_failed[idle as usize] += 1;
             if idle != true {
+                // 经过上面的一系列操作，没有完成任何任务的迁移，那么就需要累计sched domain的均衡失败次数。这个失败次数会导致后续进行更激进的均衡，例如迁移cache hot的任务、启动active balance。
+                // 此外，这里过滤掉了new idle balance的失败，仅统计周期性均衡失败的次数，这是因为系统中new idle balance次数太多，累计其失败次数会导致nr_balance_failed过大，容易触发后续激进的均衡。
                 sd_mut.nr_balance_failed += 1;
             }
         } else {
+            // 完成了至少一个任务迁移，重置均衡失败计数
             let (sd_mut, _sd_guard) = sd.self_lock();
             sd_mut.nr_balance_failed = 0;
         }
@@ -2034,11 +2090,17 @@ struct LbEnv{
     dst_rq: Arc<CpuRunQueue>,
     src_cpu: usize,
     dst_cpu: usize,
+    /// dst_rq 所在的 sched group 的 cpu mask
     dst_group_mask: CpuMask,
     new_dst_cpu: usize,
     idle: bool,
     cpus: Arc<CpuMask>,
     flags: u32,
+    /// 扫描 dest cpu 运行队列的最大次数
+    loop_max: u32,
+    imbalance: i64,
+    loop_times: u32,
+    loop_break: u32,
 }
 impl LbEnv {
     fn should_we_balance(&self) -> bool {
@@ -2051,6 +2113,14 @@ impl LbEnv {
     }
 
     fn find_busiest_queue(&self) -> Option<Arc<CpuRunQueue>> {
+        todo!()
+    }
+
+    fn detach_tasks(&self) -> usize {
+        todo!()
+    }
+
+    fn attach_tasks(&self) {
         todo!()
     }
 }
