@@ -1,7 +1,7 @@
 use alloc::sync::Arc;
 use system_error::SystemError;
 use unified_init::macros::unified_init;
-use crate::{exception::softirq::{softirq_vectors, SoftirqNumber}, init::initcall::INITCALL_SUBSYS};
+use crate::{exception::softirq::{softirq_vectors, SoftirqNumber}, init::initcall::INITCALL_SUBSYS, time::clocksource::HZ};
 use super::fair::DoRebalanceSoftirq;
 
 #[unified_init(INITCALL_SUBSYS)]
@@ -21,3 +21,6 @@ pub const LBF_ACTIVE_LB: u32 = 0x10;
 
 pub const SYSCTL_SCHED_NR_MIGRATE: u32 = 32;
 pub const SCHED_NR_MIGRATE_BREAK: u32 = 8;
+
+pub const MAX_LOAD_BALANCE_INTERVAL: u64 = HZ / 10;
+pub const SYSCTL_SCHED_MIGRATION_COST: u64 = 500000;

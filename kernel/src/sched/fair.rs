@@ -1,3 +1,4 @@
+use core::cmp::max;
 use core::cmp::min;
 use core::intrinsics::likely;
 use core::intrinsics::unlikely;
@@ -19,16 +20,20 @@ use crate::sched::balance::SCHED_NR_MIGRATE_BREAK;
 use crate::sched::balance::SYSCTL_SCHED_NR_MIGRATE;
 use crate::sched::clock::ClockUpdataFlag;
 use crate::sched::cpu_mask;
+use crate::sched::idle::CpuIdleType;
 use crate::sched::{cpu_rq, SchedFeature, SCHED_FEATURES};
 use crate::smp::core::smp_get_processor_id;
 use crate::smp::cpu::smp_cpu_manager;
 use crate::smp::cpu::ProcessorId;
+use crate::time::clocksource::HZ;
 use crate::time::jiffies::TICK_NESC;
 use crate::time::timer::clock;
 use crate::time::NSEC_PER_MSEC;
 use alloc::sync::{Arc, Weak};
 
+use super::balance::SYSCTL_SCHED_MIGRATION_COST;
 use super::idle::IdleScheduler;
+use super::idle_cpu;
 use super::pelt::{add_positive, sub_positive, SchedulerAvg, UpdateAvgFlags, PELT_MIN_DIVIDER};
 use super::sd::SchedDomain;
 use super::sd::SchedGroup;
@@ -1870,32 +1875,42 @@ fn run_rebalance_domains() {
     rebalance_domains(this_rq, idle);
 }
 
-fn rebalance_domains(rq: Arc<CpuRunQueue>, idle: bool) {
+fn rebalance_domains(rq: Arc<CpuRunQueue>, mut idle: CpuIdleType) {
     let cpu_idx = rq.cpu;
     let continue_balancing = true;
     let mut sd = cpu_rq(cpu_idx).sd.clone();
-    let need_decay = false;
+    let mut need_decay;
     // 跟踪当前 CPU 平衡任务的最大成本
     let mut max_count = 0;
     // 从当前的调度域开始，从底层到高层遍历所有的调度域
     loop {
-        // 衰减调度域的 max_newidle_lb_cost
-        // need_decay = update_newidle_cost(rq.clone(), sd.clone(), idle);
+        // 更新新的空闲负载均衡成本
+        need_decay = sd.update_newidle_cost(0);
         {
             let (sd_mut, _sd_guard) = sd.self_lock();
-            max_count += sd_mut.max_newidle_lb_cost();
+            max_count += sd_mut.max_newidle_lb_cost().load(Ordering::SeqCst);
         }
         // 提前停止负载均衡
-        if continue_balancing {
+        if !continue_balancing {
             if need_decay {
                 continue;
             }
             break;
         }
-        // let interval = get_sd_balance_interval(sd, !idle);
-
-        load_balance(cpu_idx, rq.clone(), sd.clone(), idle, continue_balancing);
-
+        let interval = sd.balance_interval(idle);
+        let jiffies = clock();
+        log::info!("rebalance_domains -> jiffies: {}, last_balance: {}, interval: {}", jiffies, sd.last_balance(), interval);
+        // 如果到了下次负载均衡的时间，那么就进行负载均衡
+        if jiffies >= sd.last_balance() + interval {
+            log::info!("rebalance_domains -> load_balance");
+            if load_balance(cpu_idx, rq.clone(), sd.clone(), idle, continue_balancing) {
+                // LBF_DST_PINNED 逻辑可能改变了目标 CPU 的状态，因此需要更新 idle 状态
+                idle = idle_cpu(cpu_idx);
+            }
+            let (sd, _sd_guard) = sd.self_lock();
+            sd.set_last_balance(jiffies);
+        }
+        
         // 如果parent不为空，继续向上遍历
         let parent_sd = {
             let (sd_mut, _sd_guard) = sd.self_lock();
@@ -1906,6 +1921,10 @@ fn rebalance_domains(rq: Arc<CpuRunQueue>, idle: bool) {
             }
         };
         sd = parent_sd;
+    }
+    if need_decay {
+        let (rq, _rq_guard) = rq.self_lock();
+        rq.max_idle_balance_cost = max(max_count, SYSCTL_SCHED_MIGRATION_COST);
     }
 }
 
@@ -1919,7 +1938,7 @@ fn rebalance_domains(rq: Arc<CpuRunQueue>, idle: bool) {
 /// - `continue_balancing`: 负载均衡是从发起 CPU 的 base domain 开始，不断向上，直到顶层的 sched domain. continue_balancing 是用来控制是否继续进行上层 sched domain 的均衡.
 ///
 /// ## 返回值: 本次负载均衡迁移的任务总数
-fn load_balance(cpu:usize, rq:Arc<CpuRunQueue>, sd: Arc<SchedDomain>, idle:bool, mut continue_balancing:bool){
+fn load_balance(cpu:usize, rq:Arc<CpuRunQueue>, sd: Arc<SchedDomain>, idle:CpuIdleType, mut continue_balancing:bool)-> bool {
     log::info!("load_balance");
     // 累计迁移的任务负载
     let mut ld_moved = 0;
@@ -2035,7 +2054,7 @@ fn load_balance(cpu:usize, rq:Arc<CpuRunQueue>, sd: Arc<SchedDomain>, idle:bool,
         }
     
         if let Some(ref sd_parent) = sd_parent {
-            let group_imbalance = &mut sd_parent.groups()[0].sgc().imbalance();
+            let group_imbalance = &mut sd_parent.groups().sgc().imbalance();
             if (env.flags & LBF_SOME_PINNED) != 0 && env.imbalance > 0 {
                 *group_imbalance = 1;
             }
@@ -2062,7 +2081,7 @@ fn load_balance(cpu:usize, rq:Arc<CpuRunQueue>, sd: Arc<SchedDomain>, idle:bool,
         if ld_moved == 0 {
             let (sd_mut, _sd_guard) = sd.self_lock();
             sd_mut.lb_failed[idle as usize] += 1;
-            if idle != true {
+            if idle != CpuIdleType::NewlyIdle {
                 // 经过上面的一系列操作，没有完成任何任务的迁移，那么就需要累计sched domain的均衡失败次数。这个失败次数会导致后续进行更激进的均衡，例如迁移cache hot的任务、启动active balance。
                 // 此外，这里过滤掉了new idle balance的失败，仅统计周期性均衡失败的次数，这是因为系统中new idle balance次数太多，累计其失败次数会导致nr_balance_failed过大，容易触发后续激进的均衡。
                 sd_mut.nr_balance_failed += 1;
@@ -2080,6 +2099,7 @@ fn load_balance(cpu:usize, rq:Arc<CpuRunQueue>, sd: Arc<SchedDomain>, idle:bool,
         let (sd_mut, _sd_guard) = sd.self_lock();
         sd_mut.lb_balanced[idle as usize] += 1;
     }
+    return true;
 }
 /// 封装负载均衡的上下文信息
 #[derive(Debug)]
@@ -2093,7 +2113,7 @@ struct LbEnv{
     /// dst_rq 所在的 sched group 的 cpu mask
     dst_group_mask: CpuMask,
     new_dst_cpu: usize,
-    idle: bool,
+    idle: CpuIdleType,
     cpus: Arc<CpuMask>,
     flags: u32,
     /// 扫描 dest cpu 运行队列的最大次数

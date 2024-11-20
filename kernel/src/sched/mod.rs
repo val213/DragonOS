@@ -21,6 +21,7 @@ use alloc::{
     vec::Vec,
 };
 use fair::DoRebalanceSoftirq;
+use idle::CpuIdleType;
 use num::Zero;
 use sd::SchedDomain;
 use system_error::SystemError;
@@ -338,10 +339,11 @@ pub struct CpuRunQueue {
     /// try to wake up a task on this CPU
     /// 指示有任务被唤醒并且需要进行调度
     ttwu_pending: usize,
-    /// 是否处于idle状态
-    idle_balance: bool,
+    /// idle状态
+    idle_balance: CpuIdleType,
 
     sd: Arc<SchedDomain>,
+    max_idle_balance_cost: u64,
 }
 
 impl CpuRunQueue {
@@ -369,8 +371,9 @@ impl CpuRunQueue {
             current: Weak::new(),
             idle: Weak::new(),
             ttwu_pending: 0,
-            idle_balance: true,
+            idle_balance: CpuIdleType::Idle,
             sd: Arc::new(SchedDomain::new(CpuMask::new())),
+            max_idle_balance_cost: 0,
         }
     }
 
@@ -712,8 +715,8 @@ impl CpuRunQueue {
         // 检查是否到达负载均衡的时间
         if self.clock >= self.next_balance {
             softirq_vectors().raise_softirq(SoftirqNumber::SCHED);
+            // TODO: nohz
         }
-        // TODO: nohz
     }
 }
 
@@ -1044,18 +1047,18 @@ pub fn send_resched_ipi(cpu: ProcessorId) {
 /// *
 ///  * Return: 1 if the CPU is currently idle. 0 otherwise.
 ///  */
-fn idle_cpu(cpu_idx: usize) -> bool {
+fn idle_cpu(cpu_idx: usize) -> CpuIdleType {
     let rq = cpu_rq(cpu_idx);
     if let (Some(current), Some(idle)) = (rq.current.upgrade(), rq.idle.upgrade()) {
         if current.pid() != idle.pid() {
-            return false;
+            return CpuIdleType::NotIdle;
         }
     }
     if rq.nr_running > 0 {
-        return false;
+        return CpuIdleType::NotIdle;
     }
     if !rq.ttwu_pending.is_zero() {
-        return false;
+        return CpuIdleType::NotIdle;
     }
-    return true;
+    return CpuIdleType::Idle;
 }
