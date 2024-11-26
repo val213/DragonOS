@@ -267,35 +267,50 @@ impl ProcessManager {
     pub fn wakeup_stop(pcb: &Arc<ProcessControlBlock>) -> Result<(), SystemError> {
         let _guard = unsafe { CurrentIrqArch::save_and_disable_irq() };
         let state = pcb.sched_info().inner_lock_read_irqsave().state();
+        log::debug!("wakeup_stop: initial state={:?}", state);
         if let ProcessState::Stopped = state {
             let mut writer = pcb.sched_info().inner_lock_write_irqsave();
             let state = writer.state();
+            log::debug!("wakeup_stop: locked state={:?}", state);
             if let ProcessState::Stopped = state {
                 writer.set_state(ProcessState::Runnable);
-                // avoid deadlock
+                log::debug!("wakeup_stop: state set to Runnable");
                 drop(writer);
-
-                let rq = cpu_rq(pcb.sched_info().on_cpu().unwrap().data() as usize);
-
+                log::debug!("wakeup_stop: cpu={:?}", pcb.sched_info()
+                    .on_cpu()
+                    .unwrap_or(smp_get_processor_id())
+                    .data() as usize);
+    
+                let rq = cpu_rq(
+                    pcb.sched_info()
+                        .on_cpu()
+                        .unwrap_or(smp_get_processor_id())
+                        .data() as usize,
+                );
+    
                 let (rq, _guard) = rq.self_lock();
                 rq.update_rq_clock();
                 rq.activate_task(
                     pcb,
                     EnqueueFlag::ENQUEUE_WAKEUP | EnqueueFlag::ENQUEUE_NOCLOCK,
                 );
-
+    
                 rq.check_preempt_currnet(pcb, WakeupFlags::empty());
-
-                // sched_enqueue(pcb.clone(), true);
+    
+                log::debug!("wakeup_stop: task activated");
                 return Ok(());
             } else if state.is_runnable() {
+                log::debug!("wakeup_stop: state is already Runnable");
                 return Ok(());
             } else {
+                log::debug!("wakeup_stop: invalid state");
                 return Err(SystemError::EINVAL);
             }
         } else if state.is_runnable() {
+            log::debug!("wakeup_stop: initial state is already Runnable");
             return Ok(());
         } else {
+            log::debug!("wakeup_stop: initial state is invalid");
             return Err(SystemError::EINVAL);
         }
     }

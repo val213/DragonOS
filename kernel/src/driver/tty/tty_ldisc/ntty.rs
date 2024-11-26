@@ -1582,6 +1582,7 @@ impl TtyLineDiscipline for NTtyLinediscipline {
         _offset: usize,
         mode: FileMode,
     ) -> Result<usize, system_error::SystemError> {
+        log::info!("NTtyLinediscipline->read");
         let mut ldata;
         if mode.contains(FileMode::O_NONBLOCK) {
             let ret = self.disc_data_try_lock();
@@ -1621,8 +1622,25 @@ impl TtyLineDiscipline for NTtyLinediscipline {
         }
 
         drop(termios);
-
-        TtyJobCtrlManager::tty_check_change(tty.clone(), Signal::SIGTTIN)?;
+        // 上游似乎没有错误处理，所以这里即使失败了也会一直重复，这里直接 panic
+        let result = TtyJobCtrlManager::tty_check_change(tty.clone(), Signal::SIGTTIN);
+        if let Err(err) = result {
+            match err {
+                SystemError::EIO => {
+                    panic!("tty_check_change error: {:?}", err);
+                }
+                SystemError::ERESTART => {
+                    // 对于 ERESTART 错误，可能是因为进程被暂停，等待信号恢复
+                    // TODO: 等支持了系统调用重启，可以在此处等待信号处理完成，然后重新尝试读取
+                    // 重新调用 read 函数，避免死循环
+                    return Err(SystemError::EINTR);
+                }
+                _ => {
+                    // 处理其他未知错误
+                    panic!("tty_check_change error: {:?}", err);
+                }
+            }
+        }
 
         let mut minimum: usize = 0;
         if !ldata.icanon {

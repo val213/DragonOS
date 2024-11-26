@@ -33,6 +33,7 @@ impl TtyJobCtrlManager {
 
     /// ### 检查tty
     pub fn tty_check_change(tty: Arc<TtyCore>, sig: Signal) -> Result<(), SystemError> {
+        // log::info!("tty_check_change, sig: {:?}", sig);
         let pcb = ProcessManager::current_pcb();
 
         if pcb.sig_info_irqsave().tty().is_none()
@@ -49,6 +50,7 @@ impl TtyJobCtrlManager {
         let tty_pgid = ctrl.pgid;
 
         if tty_pgid.is_some() && tty_pgid.unwrap() != pgid {
+            log::info!("!!tty_pgid is not equal to pgid");
             if pcb
                 .sig_info_irqsave()
                 .sig_block()
@@ -61,6 +63,8 @@ impl TtyJobCtrlManager {
                 }
             } else {
                 // 暂时使用kill而不是killpg
+                log::info!("tty_pgid: {:?}, pid:{:?}", tty_pgid, pgid);
+                log::info!("send signal {} to pgid {}", sig as i32, tty_pgid.unwrap().data());
                 Syscall::kill(pgid, sig as i32)?;
                 return Err(SystemError::ERESTART);
             }
