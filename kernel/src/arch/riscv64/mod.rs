@@ -5,6 +5,7 @@ pub mod elf;
 pub mod init;
 pub mod interrupt;
 pub mod ipc;
+pub mod kprobe;
 mod kvm;
 pub mod mm;
 pub mod msi;
@@ -25,6 +26,8 @@ pub use self::pio::RiscV64PortIOArch as CurrentPortIOArch;
 pub use self::time::RiscV64TimeArch as CurrentTimeArch;
 
 pub use self::elf::RiscV64ElfArch as CurrentElfArch;
+
+pub use self::ipc::signal::RiscV64SignalArch as CurrentSignalArch;
 
 pub use crate::arch::smp::RiscV64SMPArch as CurrentSMPArch;
 

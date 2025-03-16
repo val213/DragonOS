@@ -2,9 +2,7 @@ use inet::InetSocket;
 use smoltcp;
 use system_error::SystemError::{self, *};
 
-use crate::filesystem::vfs::IndexNode;
 use crate::libs::rwlock::RwLock;
-use crate::libs::spinlock::SpinLock;
 use crate::net::event_poll::EPollEventType;
 use crate::net::net_core::poll_ifaces;
 use crate::net::socket::*;
@@ -80,28 +78,32 @@ impl UdpSocket {
             bound.close();
             inner.take();
         }
+        // unbound socket just drop (only need to free memory)
     }
 
     pub fn try_recv(
         &self,
         buf: &mut [u8],
     ) -> Result<(usize, smoltcp::wire::IpEndpoint), SystemError> {
-        poll_ifaces();
-        let received = match self.inner.read().as_ref().expect("Udp Inner is None") {
-            UdpInner::Bound(bound) => bound.try_recv(buf),
+        match self.inner.read().as_ref().expect("Udp Inner is None") {
+            UdpInner::Bound(bound) => {
+                let ret = bound.try_recv(buf);
+                poll_ifaces();
+                ret
+            }
             _ => Err(ENOTCONN),
-        };
-        return received;
+        }
     }
 
     #[inline]
     pub fn can_recv(&self) -> bool {
-        self.on_events().contains(EP::EPOLLIN)
+        self.event().contains(EP::EPOLLIN)
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub fn can_send(&self) -> bool {
-        self.on_events().contains(EP::EPOLLOUT)
+        self.event().contains(EP::EPOLLOUT)
     }
 
     pub fn try_send(
@@ -129,18 +131,7 @@ impl UdpSocket {
         return result;
     }
 
-    pub fn read(&self, buf: &mut [u8]) -> Result<usize, SystemError> {
-        if self.is_nonblock() {
-            return self.try_recv(buf).map(|(size, _)| size);
-        } else {
-            // return self
-            //     .wait_queue
-            //     .busy_wait(EP::EPOLLIN, || self.try_recv(buf).map(|(size, _)| size));
-            todo!()
-        }
-    }
-
-    pub fn on_events(&self) -> EPollEventType {
+    pub fn event(&self) -> EPollEventType {
         let mut event = EPollEventType::empty();
         match self.inner.read().as_ref().unwrap() {
             UdpInner::Unbound(_) => {
@@ -156,8 +147,6 @@ impl UdpSocket {
 
                 if can_send {
                     event.insert(EP::EPOLLOUT | EP::EPOLLWRNORM | EP::EPOLLWRBAND);
-                } else {
-                    todo!("缓冲区空间不够，需要使用信号处理");
                 }
             }
         }
@@ -171,7 +160,7 @@ impl Socket for UdpSocket {
     }
 
     fn poll(&self) -> usize {
-        self.on_events().bits() as usize
+        self.event().bits() as usize
     }
 
     fn bind(&self, local_endpoint: Endpoint) -> Result<(), SystemError> {
@@ -197,7 +186,9 @@ impl Socket for UdpSocket {
 
     fn connect(&self, endpoint: Endpoint) -> Result<(), SystemError> {
         if let Endpoint::Ip(remote) = endpoint {
-            self.bind_emphemeral(remote.addr)?;
+            if !self.is_bound() {
+                self.bind_emphemeral(remote.addr)?;
+            }
             if let UdpInner::Bound(inner) = self.inner.read().as_ref().expect("UDP Inner disappear")
             {
                 inner.connect(remote);
@@ -209,46 +200,30 @@ impl Socket for UdpSocket {
         return Err(EAFNOSUPPORT);
     }
 
-    fn send(&self, buffer: &[u8], flags: MessageFlag) -> Result<usize, SystemError> {
-        // if flags.contains(MessageFlag::DONTWAIT) {
+    fn send(&self, buffer: &[u8], flags: PMSG) -> Result<usize, SystemError> {
+        if flags.contains(PMSG::DONTWAIT) {
+            log::warn!("Nonblock send is not implemented yet");
+        }
 
         return self.try_send(buffer, None);
-        // } else {
-        //     // return self
-        //     //     .wait_queue
-        //     //     .busy_wait(EP::EPOLLOUT, || self.try_send(buffer, None));
-        //     todo!()
-        // }
     }
 
-    fn send_to(
-        &self,
-        buffer: &[u8],
-        flags: MessageFlag,
-        address: Endpoint,
-    ) -> Result<usize, SystemError> {
-        // if flags.contains(MessageFlag::DONTWAIT) {
+    fn send_to(&self, buffer: &[u8], flags: PMSG, address: Endpoint) -> Result<usize, SystemError> {
+        if flags.contains(PMSG::DONTWAIT) {
+            log::warn!("Nonblock send is not implemented yet");
+        }
+
         if let Endpoint::Ip(remote) = address {
             return self.try_send(buffer, Some(remote));
         }
-        // } else {
-        //     // return self
-        //     //     .wait_queue
-        //     //     .busy_wait(EP::EPOLLOUT, || {
-        //     //         if let Endpoint::Ip(remote) = address {
-        //     //             return self.try_send(buffer, Some(remote.addr));
-        //     //         }
-        //     //         return Err(EAFNOSUPPORT);
-        //     //     });
-        //     todo!()
-        // }
+
         return Err(EINVAL);
     }
 
-    fn recv(&self, buffer: &mut [u8], flags: MessageFlag) -> Result<usize, SystemError> {
+    fn recv(&self, buffer: &mut [u8], flags: PMSG) -> Result<usize, SystemError> {
         use crate::sched::SchedMode;
 
-        return if self.is_nonblock() || flags.contains(MessageFlag::DONTWAIT) {
+        return if self.is_nonblock() || flags.contains(PMSG::DONTWAIT) {
             self.try_recv(buffer)
         } else {
             loop {
@@ -266,7 +241,7 @@ impl Socket for UdpSocket {
     fn recv_from(
         &self,
         buffer: &mut [u8],
-        flags: MessageFlag,
+        flags: PMSG,
         address: Option<Endpoint>,
     ) -> Result<(usize, Endpoint), SystemError> {
         use crate::sched::SchedMode;
@@ -275,7 +250,7 @@ impl Socket for UdpSocket {
             self.connect(endpoint)?;
         }
 
-        return if self.is_nonblock() || flags.contains(MessageFlag::DONTWAIT) {
+        return if self.is_nonblock() || flags.contains(PMSG::DONTWAIT) {
             self.try_recv(buffer)
         } else {
             loop {
@@ -289,6 +264,11 @@ impl Socket for UdpSocket {
             }
         }
         .map(|(len, remote)| (len, Endpoint::Ip(remote)));
+    }
+
+    fn close(&self) -> Result<(), SystemError> {
+        self.close();
+        Ok(())
     }
 }
 
@@ -325,129 +305,3 @@ bitflags! {
         const ESPINTCP = 7;             // Yikes, this is really xfrm encap types.
     }
 }
-
-// fn sock_set_option(
-//     &self,
-//     _socket: &mut udp::Socket,
-//     _level: SocketOptionsLevel,
-//     optname: PosixSocketOption,
-//     _optval: &[u8],
-// ) -> Result<(), SystemError> {
-//     use PosixSocketOption::*;
-//     use SystemError::*;
-
-//     if optname == SO_BINDTODEVICE {
-//         todo!("SO_BINDTODEVICE");
-//     }
-
-//     match optname {
-//         SO_TYPE => {}
-//         SO_PROTOCOL => {}
-//         SO_DOMAIN => {}
-//         SO_ERROR => {
-//             return Err(ENOPROTOOPT);
-//         }
-//         SO_TIMESTAMP_OLD => {}
-//         SO_TIMESTAMP_NEW => {}
-//         SO_TIMESTAMPNS_OLD => {}
-
-//         SO_TIMESTAMPING_OLD => {}
-
-//         SO_RCVTIMEO_OLD => {}
-
-//         SO_SNDTIMEO_OLD => {}
-
-//         // if define CONFIG_NET_RX_BUSY_POLL
-//         SO_BUSY_POLL | SO_PREFER_BUSY_POLL | SO_BUSY_POLL_BUDGET => {
-//             debug!("Unsupported socket option: {:?}", optname);
-//             return Err(ENOPROTOOPT);
-//         }
-//         // end if
-//         optname => {
-//             debug!("Unsupported socket option: {:?}", optname);
-//             return Err(ENOPROTOOPT);
-//         }
-//     }
-//     return Ok(());
-// }
-
-// fn udp_set_option(
-//     &self,
-//     level: SocketOptionsLevel,
-//     optname: usize,
-//     optval: &[u8],
-// ) -> Result<(), SystemError> {
-//     use PosixSocketOption::*;
-
-//     let so_opt_name =
-//         PosixSocketOption::try_from(optname as i32)
-//             .map_err(|_| SystemError::ENOPROTOOPT)?;
-
-//     if level == SocketOptionsLevel::SOL_SOCKET {
-//         self.with_mut_socket(f)
-//         self.sock_set_option(self., level, so_opt_name, optval)?;
-//         if so_opt_name == SO_RCVBUF || so_opt_name == SO_RCVBUFFORCE {
-//             todo!("SO_RCVBUF");
-//         }
-//     }
-
-//     match UdpSocketOptions::from_bits_truncate(optname as u32) {
-//         UdpSocketOptions::UDP_CORK => {
-//             todo!("UDP_CORK");
-//         }
-//         UdpSocketOptions::UDP_ENCAP => {
-//             match UdpEncapTypes::from_bits_truncate(optval[0]) {
-//                 UdpEncapTypes::ESPINUDP_NON_IKE => {
-//                     todo!("ESPINUDP_NON_IKE");
-//                 }
-//                 UdpEncapTypes::ESPINUDP => {
-//                     todo!("ESPINUDP");
-//                 }
-//                 UdpEncapTypes::L2TPINUDP => {
-//                     todo!("L2TPINUDP");
-//                 }
-//                 UdpEncapTypes::GTP0 => {
-//                     todo!("GTP0");
-//                 }
-//                 UdpEncapTypes::GTP1U => {
-//                     todo!("GTP1U");
-//                 }
-//                 UdpEncapTypes::RXRPC => {
-//                     todo!("RXRPC");
-//                 }
-//                 UdpEncapTypes::ESPINTCP => {
-//                     todo!("ESPINTCP");
-//                 }
-//                 UdpEncapTypes::ZERO => {}
-//                 _ => {
-//                     return Err(SystemError::ENOPROTOOPT);
-//                 }
-//             }
-//         }
-//         UdpSocketOptions::UDP_NO_CHECK6_TX => {
-//             todo!("UDP_NO_CHECK6_TX");
-//         }
-//         UdpSocketOptions::UDP_NO_CHECK6_RX => {
-//             todo!("UDP_NO_CHECK6_RX");
-//         }
-//         UdpSocketOptions::UDP_SEGMENT => {
-//             todo!("UDP_SEGMENT");
-//         }
-//         UdpSocketOptions::UDP_GRO => {
-//             todo!("UDP_GRO");
-//         }
-
-//         UdpSocketOptions::UDPLITE_RECV_CSCOV => {
-//             todo!("UDPLITE_RECV_CSCOV");
-//         }
-//         UdpSocketOptions::UDPLITE_SEND_CSCOV => {
-//             todo!("UDPLITE_SEND_CSCOV");
-//         }
-
-//         UdpSocketOptions::ZERO => {}
-//         _ => {
-//             return Err(SystemError::ENOPROTOOPT);
-//         }
-//     }
-//     return Ok(());
-// }

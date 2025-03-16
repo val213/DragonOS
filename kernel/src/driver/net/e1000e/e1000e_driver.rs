@@ -96,11 +96,11 @@ pub struct InnerE1000EInterface {
 }
 
 impl phy::RxToken for E1000ERxToken {
-    fn consume<R, F>(mut self, f: F) -> R
+    fn consume<R, F>(self, f: F) -> R
     where
-        F: FnOnce(&mut [u8]) -> R,
+        F: FnOnce(&[u8]) -> R,
     {
-        let result = f(self.0.as_mut_slice());
+        let result = f(self.0.as_slice());
         self.0.free_buffer();
         return result;
     }
@@ -202,7 +202,7 @@ impl E1000EInterface {
 
         let result = Arc::new(E1000EInterface {
             driver: E1000EDriverWrapper(UnsafeCell::new(driver)),
-            common: IfaceCommon::new(iface_id, iface),
+            common: IfaceCommon::new(iface_id, false, iface),
             name: format!("eth{}", iface_id),
             inner: SpinLock::new(InnerE1000EInterface {
                 netdevice_common: NetDeviceCommonData::default(),

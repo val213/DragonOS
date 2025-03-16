@@ -5,6 +5,7 @@ use system_error::SystemError::{self, *};
 pub mod port;
 pub use port::PortManager;
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Types {
     Raw,
@@ -39,25 +40,24 @@ impl BoundInner {
         T: smoltcp::socket::AnySocket<'static>,
     {
         if address.is_unspecified() {
-            // let inner = Vec::new();
-            // for (_, iface) in *NET_DEVICES.read_irqsave() {
-            //     let handle = iface.sockets().lock_no_preempt().add(socket);
-            //     iface
-            // }
             // 强绑VirtualIO
-            log::debug!("Not bind to any iface, bind to virtIO");
             let iface = NET_DEVICES
                 .read_irqsave()
-                .get(&0)
-                .expect("??bind without virtIO, serious?")
-                .clone();
-            let handle = iface.sockets().lock_no_preempt().add(socket);
+                .iter()
+                .find_map(|(_, v)| {
+                    if v.common().is_default_iface() {
+                        Some(v.clone())
+                    } else {
+                        None
+                    }
+                })
+                .expect("No default interface");
+
+            let handle = iface.sockets().lock_irqsave().add(socket);
             return Ok(Self { handle, iface });
         } else {
             let iface = get_iface_to_bind(address).ok_or(ENODEV)?;
-            let handle = iface.sockets().lock_no_preempt().add(socket);
-            // log::debug!("Bind to iface: {}", iface.iface_name());
-            // return Ok(Self { inner: vec![(handle, iface)] });
+            let handle = iface.sockets().lock_irqsave().add(socket);
             return Ok(Self { handle, iface });
         }
     }

@@ -4,11 +4,12 @@ pub mod ipi;
 pub mod msi;
 pub mod trap;
 
+use core::any::Any;
 use core::{
     arch::asm,
     sync::atomic::{compiler_fence, Ordering},
 };
-
+use kprobe::ProbeArgs;
 use log::error;
 use system_error::SystemError;
 
@@ -124,6 +125,8 @@ pub struct TrapFrame {
     pub es: ::core::ffi::c_ulong,
     pub rax: ::core::ffi::c_ulong,
     pub func: ::core::ffi::c_ulong,
+    /// - 该字段在异常发生时，保存的是错误码
+    /// - 在系统调用时，由系统调用入口函数将其设置为系统调用号
     pub errcode: ::core::ffi::c_ulong,
     pub rip: ::core::ffi::c_ulong,
     pub cs: ::core::ffi::c_ulong,
@@ -176,5 +179,47 @@ impl TrapFrame {
     /// 判断当前中断是否来自用户模式
     pub fn is_from_user(&self) -> bool {
         return (self.cs & 0x3) != 0;
+    }
+    /// 设置当前的程序计数器
+    pub fn set_pc(&mut self, pc: usize) {
+        self.rip = pc as u64;
+    }
+
+    /// 获取系统调用号
+    ///
+    /// # Safety
+    /// 该函数只能在系统调用上下文中调用，
+    /// 在其他上下文中，该函数返回值未定义
+    pub unsafe fn syscall_nr(&self) -> Option<usize> {
+        if self.errcode == u64::MAX {
+            return None;
+        }
+        Some(self.errcode as usize)
+    }
+
+    /// 获取系统调用错误码
+    ///
+    /// # Safety
+    /// 该函数只能在系统调用上下文中调用，
+    /// 在其他上下文中，该函数返回值未定义
+    ///
+    /// # Returns
+    /// 返回一个 `Option<SystemError>`，表示系统调用的错误码。
+    pub unsafe fn syscall_error(&self) -> Option<SystemError> {
+        let val = self.rax as i32;
+        SystemError::from_posix_errno(val)
+    }
+}
+
+impl ProbeArgs for TrapFrame {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn break_address(&self) -> usize {
+        (self.rip - 1) as usize
+    }
+
+    fn debug_address(&self) -> usize {
+        self.rip as usize
     }
 }

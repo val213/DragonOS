@@ -4,6 +4,7 @@ use alloc::{
     sync::{Arc, Weak},
 };
 use core::sync::atomic::{AtomicBool, Ordering};
+use unix::ns::abs::{remove_abs_addr, ABS_INODE_MAP};
 
 use crate::sched::SchedMode;
 use crate::{libs::rwlock::RwLock, net::socket::*};
@@ -118,6 +119,7 @@ impl SeqpacketSocket {
         self.is_nonblocking.load(Ordering::Relaxed)
     }
 
+    #[allow(dead_code)]
     fn set_nonblocking(&self, nonblocking: bool) {
         self.is_nonblocking.store(nonblocking, Ordering::Relaxed);
     }
@@ -133,6 +135,23 @@ impl Socket for SeqpacketSocket {
                 match inode {
                     Endpoint::Inode((inode, _)) => inode.clone(),
                     _ => return Err(SystemError::EINVAL),
+                }
+            }
+            Endpoint::Abspath((abs_addr, _)) => {
+                let inode_guard = ABS_INODE_MAP.lock_irqsave();
+                let inode = match inode_guard.get(&abs_addr.name()) {
+                    Some(inode) => inode,
+                    None => {
+                        log::debug!("can not find inode from absInodeMap");
+                        return Err(SystemError::EINVAL);
+                    }
+                };
+                match inode {
+                    Endpoint::Inode((inode, _)) => inode.clone(),
+                    _ => {
+                        log::debug!("when connect, find inode failed!");
+                        return Err(SystemError::EINVAL);
+                    }
                 }
             }
             _ => return Err(SystemError::EINVAL),
@@ -196,6 +215,17 @@ impl Socket for SeqpacketSocket {
                 INODE_MAP.write_irqsave().insert(inodeid, inode);
                 Ok(())
             }
+            Endpoint::Abspath((abshandle, path)) => {
+                let inode = match &mut *self.inner.write() {
+                    Inner::Init(init) => init.bind_path(path)?,
+                    _ => {
+                        log::error!("socket has listen or connected");
+                        return Err(SystemError::EINVAL);
+                    }
+                };
+                ABS_INODE_MAP.lock_irqsave().insert(abshandle.name(), inode);
+                Ok(())
+            }
             _ => return Err(SystemError::EINVAL),
         }
     }
@@ -230,11 +260,7 @@ impl Socket for SeqpacketSocket {
         if !self.is_nonblocking() {
             loop {
                 wq_wait_event_interruptible!(self.wait_queue, self.is_acceptable(), {})?;
-                match self
-                    .try_accept()
-                    .map(|(seqpacket_socket, remote_endpoint)| {
-                        (seqpacket_socket, Endpoint::from(remote_endpoint))
-                    }) {
+                match self.try_accept() {
                     Ok((socket, epoint)) => return Ok((socket, epoint)),
                     Err(_) => continue,
                 }
@@ -247,7 +273,7 @@ impl Socket for SeqpacketSocket {
 
     fn set_option(
         &self,
-        _level: crate::net::socket::OptionsLevel,
+        _level: crate::net::socket::PSOL,
         _optname: usize,
         _optval: &[u8],
     ) -> Result<(), SystemError> {
@@ -260,10 +286,63 @@ impl Socket for SeqpacketSocket {
     }
 
     fn close(&self) -> Result<(), SystemError> {
-        log::debug!("seqpacket close");
+        // log::debug!("seqpacket close");
         self.shutdown.recv_shutdown();
         self.shutdown.send_shutdown();
-        Ok(())
+
+        let endpoint = self.get_name()?;
+        let path = match &endpoint {
+            Endpoint::Inode((_, path)) => path,
+            Endpoint::Unixpath((_, path)) => path,
+            Endpoint::Abspath((_, path)) => path,
+            _ => return Err(SystemError::EINVAL),
+        };
+
+        if path.is_empty() {
+            return Ok(());
+        }
+
+        match &endpoint {
+            Endpoint::Unixpath((inode_id, _)) => {
+                let mut inode_guard = INODE_MAP.write_irqsave();
+                inode_guard.remove(inode_id);
+            }
+            Endpoint::Inode((current_inode, current_path)) => {
+                let mut inode_guard = INODE_MAP.write_irqsave();
+                // 遍历查找匹配的条目
+                let target_entry = inode_guard
+                    .iter()
+                    .find(|(_, ep)| {
+                        if let Endpoint::Inode((map_inode, map_path)) = ep {
+                            // 通过指针相等性比较确保是同一对象
+                            Arc::ptr_eq(map_inode, current_inode) && map_path == current_path
+                        } else {
+                            log::debug!("not match");
+                            false
+                        }
+                    })
+                    .map(|(id, _)| *id);
+
+                if let Some(id) = target_entry {
+                    inode_guard.remove(&id).ok_or(SystemError::EINVAL)?;
+                }
+            }
+            Endpoint::Abspath((abshandle, _)) => {
+                let mut abs_inode_map = ABS_INODE_MAP.lock_irqsave();
+                abs_inode_map.remove(&abshandle.name());
+            }
+            _ => {
+                log::error!("invalid endpoint type");
+                return Err(SystemError::EINVAL);
+            }
+        }
+
+        *self.inner.write() = Inner::Init(Init::new());
+        self.wait_queue.wakeup(None);
+
+        let _ = remove_abs_addr(path);
+
+        return Ok(());
     }
 
     fn get_peer_name(&self) -> Result<Endpoint, SystemError> {
@@ -274,7 +353,7 @@ impl Socket for SeqpacketSocket {
         };
 
         if let Some(endpoint) = endpoint {
-            return Ok(Endpoint::from(endpoint));
+            return Ok(endpoint);
         } else {
             return Err(SystemError::EAGAIN_OR_EWOULDBLOCK);
         }
@@ -289,7 +368,7 @@ impl Socket for SeqpacketSocket {
         };
 
         if let Some(endpoint) = endpoint {
-            return Ok(Endpoint::from(endpoint));
+            return Ok(endpoint);
         } else {
             return Err(SystemError::EAGAIN_OR_EWOULDBLOCK);
         }
@@ -297,7 +376,7 @@ impl Socket for SeqpacketSocket {
 
     fn get_option(
         &self,
-        _level: crate::net::socket::OptionsLevel,
+        _level: crate::net::socket::PSOL,
         _name: usize,
         _value: &mut [u8],
     ) -> Result<usize, SystemError> {
@@ -306,18 +385,18 @@ impl Socket for SeqpacketSocket {
     }
 
     fn read(&self, buffer: &mut [u8]) -> Result<usize, SystemError> {
-        self.recv(buffer, crate::net::socket::MessageFlag::empty())
+        self.recv(buffer, crate::net::socket::PMSG::empty())
     }
 
     fn recv(
         &self,
         buffer: &mut [u8],
-        flags: crate::net::socket::MessageFlag,
+        flags: crate::net::socket::PMSG,
     ) -> Result<usize, SystemError> {
-        if flags.contains(MessageFlag::OOB) {
+        if flags.contains(PMSG::OOB) {
             return Err(SystemError::EOPNOTSUPP_OR_ENOTSUP);
         }
-        if !flags.contains(MessageFlag::DONTWAIT) {
+        if !flags.contains(PMSG::DONTWAIT) {
             loop {
                 wq_wait_event_interruptible!(
                     self.wait_queue,
@@ -347,23 +426,19 @@ impl Socket for SeqpacketSocket {
     fn recv_msg(
         &self,
         _msg: &mut crate::net::syscall::MsgHdr,
-        _flags: crate::net::socket::MessageFlag,
+        _flags: crate::net::socket::PMSG,
     ) -> Result<usize, SystemError> {
         Err(SystemError::ENOSYS)
     }
 
-    fn send(
-        &self,
-        buffer: &[u8],
-        flags: crate::net::socket::MessageFlag,
-    ) -> Result<usize, SystemError> {
-        if flags.contains(MessageFlag::OOB) {
+    fn send(&self, buffer: &[u8], flags: crate::net::socket::PMSG) -> Result<usize, SystemError> {
+        if flags.contains(PMSG::OOB) {
             return Err(SystemError::EOPNOTSUPP_OR_ENOTSUP);
         }
         if self.is_peer_shutdown()? {
             return Err(SystemError::EPIPE);
         }
-        if !flags.contains(MessageFlag::DONTWAIT) {
+        if !flags.contains(PMSG::DONTWAIT) {
             loop {
                 match &*self.inner.write() {
                     Inner::Connected(connected) => match connected.try_write(buffer) {
@@ -387,26 +462,26 @@ impl Socket for SeqpacketSocket {
     fn send_msg(
         &self,
         _msg: &crate::net::syscall::MsgHdr,
-        _flags: crate::net::socket::MessageFlag,
+        _flags: crate::net::socket::PMSG,
     ) -> Result<usize, SystemError> {
         Err(SystemError::ENOSYS)
     }
 
     fn write(&self, buffer: &[u8]) -> Result<usize, SystemError> {
-        self.send(buffer, crate::net::socket::MessageFlag::empty())
+        self.send(buffer, crate::net::socket::PMSG::empty())
     }
 
     fn recv_from(
         &self,
         buffer: &mut [u8],
-        flags: MessageFlag,
+        flags: PMSG,
         _address: Option<Endpoint>,
     ) -> Result<(usize, Endpoint), SystemError> {
-        log::debug!("recvfrom flags {:?}", flags);
-        if flags.contains(MessageFlag::OOB) {
+        // log::debug!("recvfrom flags {:?}", flags);
+        if flags.contains(PMSG::OOB) {
             return Err(SystemError::EOPNOTSUPP_OR_ENOTSUP);
         }
-        if !flags.contains(MessageFlag::DONTWAIT) {
+        if !flags.contains(PMSG::DONTWAIT) {
             loop {
                 wq_wait_event_interruptible!(
                     self.wait_queue,
@@ -417,7 +492,7 @@ impl Socket for SeqpacketSocket {
                 match &*self.inner.write() {
                     Inner::Connected(connected) => match connected.recv_slice(buffer) {
                         Ok(usize) => {
-                            log::debug!("recvs from successfully");
+                            // log::debug!("recvs from successfully");
                             return Ok((usize, connected.peer_endpoint().unwrap().clone()));
                         }
                         Err(_) => continue,
@@ -435,12 +510,12 @@ impl Socket for SeqpacketSocket {
     }
 
     fn send_buffer_size(&self) -> usize {
-        log::warn!("using default buffer size");
+        // log::warn!("using default buffer size");
         SeqpacketSocket::DEFAULT_BUF_SIZE
     }
 
     fn recv_buffer_size(&self) -> usize {
-        log::warn!("using default buffer size");
+        // log::warn!("using default buffer size");
         SeqpacketSocket::DEFAULT_BUF_SIZE
     }
 

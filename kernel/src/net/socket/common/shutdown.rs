@@ -1,4 +1,8 @@
+// TODO: 其他模块需要实现shutdown的具体逻辑
+#![allow(dead_code)]
 use core::sync::atomic::AtomicU8;
+
+use system_error::SystemError;
 
 bitflags! {
     /// @brief 用于指定socket的关闭类型
@@ -53,21 +57,21 @@ impl Shutdown {
             .fetch_or(SEND_SHUTDOWN, core::sync::atomic::Ordering::SeqCst);
     }
 
-    // pub fn is_recv_shutdown(&self) -> bool {
-    //     self.bit.load(core::sync::atomic::Ordering::SeqCst) & RCV_SHUTDOWN != 0
-    // }
+    pub fn is_recv_shutdown(&self) -> bool {
+        self.bit.load(core::sync::atomic::Ordering::SeqCst) & RCV_SHUTDOWN != 0
+    }
 
-    // pub fn is_send_shutdown(&self) -> bool {
-    //     self.bit.load(core::sync::atomic::Ordering::SeqCst) & SEND_SHUTDOWN != 0
-    // }
+    pub fn is_send_shutdown(&self) -> bool {
+        self.bit.load(core::sync::atomic::Ordering::SeqCst) & SEND_SHUTDOWN != 0
+    }
 
-    // pub fn is_both_shutdown(&self) -> bool {
-    //     self.bit.load(core::sync::atomic::Ordering::SeqCst) & SHUTDOWN_MASK == SHUTDOWN_MASK
-    // }
+    pub fn is_both_shutdown(&self) -> bool {
+        self.bit.load(core::sync::atomic::Ordering::SeqCst) & SHUTDOWN_MASK == SHUTDOWN_MASK
+    }
 
-    // pub fn is_empty(&self) -> bool {
-    //     self.bit.load(core::sync::atomic::Ordering::SeqCst) == 0
-    // }
+    pub fn is_empty(&self) -> bool {
+        self.bit.load(core::sync::atomic::Ordering::SeqCst) == 0
+    }
 
     pub fn from_how(how: usize) -> Self {
         Self::from(ShutdownBit::from_bits_truncate(how as u8))
@@ -101,8 +105,8 @@ impl ShutdownTemp {
         self.bit == 0
     }
 
-    pub fn from_how(how: usize) -> Self {
-        Self { bit: how as u8 + 1 }
+    pub fn bits(&self) -> ShutdownBit {
+        ShutdownBit { bits: self.bit }
     }
 }
 
@@ -113,6 +117,19 @@ impl From<ShutdownBit> for ShutdownTemp {
             ShutdownBit::SHUT_WR => Self { bit: SEND_SHUTDOWN },
             ShutdownBit::SHUT_RDWR => Self { bit: SHUTDOWN_MASK },
             _ => Self { bit: 0 },
+        }
+    }
+}
+
+impl TryFrom<usize> for ShutdownTemp {
+    type Error = SystemError;
+
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        match value {
+            0..2 => Ok(ShutdownTemp {
+                bit: value as u8 + 1,
+            }),
+            _ => Err(SystemError::EINVAL),
         }
     }
 }

@@ -8,12 +8,13 @@ use alloc::{
     collections::BTreeMap,
     string::{String, ToString},
     sync::{Arc, Weak},
+    vec::Vec,
 };
 use system_error::SystemError;
 
 use crate::{
     driver::base::device::device_number::DeviceNumber,
-    filesystem::vfs::ROOT_INODE,
+    filesystem::{page_cache::PageCache, vfs::ROOT_INODE},
     libs::{
         casting::DowncastArc,
         rwlock::RwLock,
@@ -23,10 +24,8 @@ use crate::{
 };
 
 use super::{
-    file::{FileMode, PageCache},
-    syscall::ModeType,
-    utils::DName,
-    FilePrivateData, FileSystem, FileType, IndexNode, InodeId, Magic, SuperBlock,
+    file::FileMode, syscall::ModeType, utils::DName, FilePrivateData, FileSystem, FileType,
+    IndexNode, InodeId, Magic, SuperBlock,
 };
 
 const MOUNTFS_BLOCK_SIZE: u64 = 512;
@@ -215,12 +214,29 @@ impl MountFSInode {
             .ok_or(SystemError::ENOENT);
     }
 
-    fn do_absolute_path(&self, len: usize) -> Result<String, SystemError> {
-        if self.metadata()?.inode_id == ROOT_INODE().metadata()?.inode_id {
-            return Ok(String::with_capacity(len));
+    fn do_absolute_path(&self) -> Result<String, SystemError> {
+        let mut path_parts = Vec::new();
+        let mut current = self.self_ref.upgrade().unwrap();
+
+        while current.metadata()?.inode_id != ROOT_INODE().metadata()?.inode_id {
+            let name = current.dname()?;
+            path_parts.push(name.0);
+            current = current.do_parent()?;
         }
-        let name = self.dname()?;
-        return Ok(self.do_parent()?.do_absolute_path(len + name.0.len() + 1)? + "/" + &name.0);
+
+        // 由于我们从叶子节点向上遍历到根节点，所以需要反转路径部分
+        path_parts.reverse();
+
+        // 构建最终的绝对路径字符串
+        let mut absolute_path = String::with_capacity(
+            path_parts.iter().map(|s| s.len()).sum::<usize>() + path_parts.len(),
+        );
+        for part in path_parts {
+            absolute_path.push('/');
+            absolute_path.push_str(&part);
+        }
+
+        Ok(absolute_path)
     }
 }
 
@@ -276,6 +292,26 @@ impl IndexNode for MountFSInode {
         data: SpinLockGuard<FilePrivateData>,
     ) -> Result<usize, SystemError> {
         return self.inner_inode.write_at(offset, len, buf, data);
+    }
+
+    fn read_direct(
+        &self,
+        offset: usize,
+        len: usize,
+        buf: &mut [u8],
+        data: SpinLockGuard<FilePrivateData>,
+    ) -> Result<usize, SystemError> {
+        self.inner_inode.read_direct(offset, len, buf, data)
+    }
+
+    fn write_direct(
+        &self,
+        offset: usize,
+        len: usize,
+        buf: &[u8],
+        data: SpinLockGuard<FilePrivateData>,
+    ) -> Result<usize, SystemError> {
+        self.inner_inode.write_direct(offset, len, buf, data)
     }
 
     #[inline]
@@ -400,6 +436,15 @@ impl IndexNode for MountFSInode {
     }
 
     #[inline]
+    fn kernel_ioctl(
+        &self,
+        arg: Arc<dyn crate::net::event_poll::KernelIoctlData>,
+        data: &FilePrivateData,
+    ) -> Result<usize, SystemError> {
+        return self.inner_inode.kernel_ioctl(arg, data);
+    }
+
+    #[inline]
     fn list(&self) -> Result<alloc::vec::Vec<alloc::string::String>, SystemError> {
         return self.inner_inode.list();
     }
@@ -460,7 +505,7 @@ impl IndexNode for MountFSInode {
     }
 
     fn absolute_path(&self) -> Result<String, SystemError> {
-        self.do_absolute_path(0)
+        self.do_absolute_path()
     }
 
     #[inline]

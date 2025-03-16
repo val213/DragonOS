@@ -8,10 +8,7 @@ use alloc::{
 use crate::{
     driver::base::{
         class::Class,
-        device::{
-            bus::Bus, driver::Driver, CommonAttrGroup, Device, DeviceCommonData, DeviceType,
-            IdTable,
-        },
+        device::{bus::Bus, driver::Driver, Device, DeviceCommonData, DeviceType, IdTable},
         kobject::{KObjType, KObject, KObjectCommonData, KObjectState, LockedKObjectState},
         kset::KSet,
     },
@@ -40,9 +37,9 @@ struct InnerPciGeneralDevice {
     device_common: DeviceCommonData,
 }
 
-impl From<&PciDeviceStructureGeneralDevice> for PciGeneralDevice {
-    fn from(value: &PciDeviceStructureGeneralDevice) -> Self {
-        let value = Arc::new(value.clone());
+impl From<Arc<PciDeviceStructureGeneralDevice>> for PciGeneralDevice {
+    fn from(value: Arc<PciDeviceStructureGeneralDevice>) -> Self {
+        // let value = Arc::new(value.clone());
         let name: String = value.common_header.bus_device_function.into();
         let kobj_state = LockedKObjectState::new(None);
         let dev_id = PciDeviceID::dummpy();
@@ -83,11 +80,35 @@ impl PciDevice for PciGeneralDevice {
     fn subsystem_device(&self) -> u16 {
         self.header.subsystem_id
     }
+
+    fn class_code(&self) -> u8 {
+        self.header.common_header.class_code
+    }
+
+    fn revision(&self) -> u8 {
+        self.header.common_header.revision_id
+    }
+
+    fn irq_type(&self) -> &RwLock<super::pci_irq::IrqType> {
+        &self.header.irq_type
+    }
+
+    fn irq_line(&self) -> u8 {
+        self.header.interrupt_line
+    }
+
+    fn interface_code(&self) -> u8 {
+        self.header.common_header.prog_if
+    }
+
+    fn subclass(&self) -> u8 {
+        self.header.common_header.subclass
+    }
 }
 
 impl Device for PciGeneralDevice {
     fn attribute_groups(&self) -> Option<&'static [&'static dyn AttributeGroup]> {
-        Some(&[&BasicPciReadOnlyAttrs, &CommonAttrGroup])
+        Some(&[&BasicPciReadOnlyAttrs])
     }
 
     fn bus(&self) -> Option<Weak<dyn Bus>> {

@@ -3,7 +3,7 @@ use crate::arch::mm::kernel_page_flags;
 use crate::arch::MMArch;
 
 use crate::mm::kernel_mapper::KernelMapper;
-use crate::mm::page::{page_manager_lock_irqsave, EntryFlags};
+use crate::mm::page::EntryFlags;
 use crate::mm::{
     allocator::page_frame::{
         allocate_page_frames, deallocate_page_frames, PageFrameCount, PhysPageFrame,
@@ -23,7 +23,9 @@ unsafe impl Hal for HalImpl {
         _direction: BufferDirection,
     ) -> (virtio_drivers::PhysAddr, NonNull<u8>) {
         let page_num = PageFrameCount::new(
-            ((pages * PAGE_SIZE + MMArch::PAGE_SIZE - 1) / MMArch::PAGE_SIZE).next_power_of_two(),
+            (pages * PAGE_SIZE)
+                .div_ceil(MMArch::PAGE_SIZE)
+                .next_power_of_two(),
         );
         unsafe {
             let (paddr, count) =
@@ -55,7 +57,9 @@ unsafe impl Hal for HalImpl {
         pages: usize,
     ) -> i32 {
         let page_count = PageFrameCount::new(
-            ((pages * PAGE_SIZE + MMArch::PAGE_SIZE - 1) / MMArch::PAGE_SIZE).next_power_of_two(),
+            (pages * PAGE_SIZE)
+                .div_ceil(MMArch::PAGE_SIZE)
+                .next_power_of_two(),
         );
 
         // 恢复页面属性
@@ -68,11 +72,7 @@ unsafe impl Hal for HalImpl {
         flusher.flush();
 
         unsafe {
-            deallocate_page_frames(
-                PhysPageFrame::new(PhysAddr::new(paddr)),
-                page_count,
-                &mut page_manager_lock_irqsave(),
-            );
+            deallocate_page_frames(PhysPageFrame::new(PhysAddr::new(paddr)), page_count);
         }
         return 0;
     }

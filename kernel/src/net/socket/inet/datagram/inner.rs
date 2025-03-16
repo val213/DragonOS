@@ -32,18 +32,33 @@ impl UnboundUdp {
         return Self { socket };
     }
 
-    pub fn bind(
-        mut self,
-        local_endpoint: smoltcp::wire::IpEndpoint,
-    ) -> Result<BoundUdp, SystemError> {
-        // let (addr, port) = (local_endpoint.addr, local_endpoint.port);
-        if self.socket.bind(local_endpoint).is_err() {
-            return Err(EINVAL);
-        }
+    pub fn bind(self, local_endpoint: smoltcp::wire::IpEndpoint) -> Result<BoundUdp, SystemError> {
         let inner = BoundInner::bind(self.socket, &local_endpoint.addr)?;
-        inner
-            .port_manager()
-            .bind_port(InetTypes::Udp, local_endpoint.port)?;
+        let bind_addr = local_endpoint.addr;
+        let bind_port = if local_endpoint.port == 0 {
+            inner.port_manager().bind_ephemeral_port(InetTypes::Udp)?
+        } else {
+            inner
+                .port_manager()
+                .bind_port(InetTypes::Udp, local_endpoint.port)?;
+            local_endpoint.port
+        };
+
+        if bind_addr.is_unspecified() {
+            if inner
+                .with_mut::<smoltcp::socket::udp::Socket, _, _>(|socket| socket.bind(bind_port))
+                .is_err()
+            {
+                return Err(SystemError::EINVAL);
+            }
+        } else if inner
+            .with_mut::<smoltcp::socket::udp::Socket, _, _>(|socket| {
+                socket.bind(smoltcp::wire::IpEndpoint::new(bind_addr, bind_port))
+            })
+            .is_err()
+        {
+            return Err(SystemError::EINVAL);
+        }
         Ok(BoundUdp {
             inner,
             remote: SpinLock::new(None),
@@ -59,10 +74,6 @@ impl UnboundUdp {
             inner,
             remote: SpinLock::new(Some(endpoint)),
         })
-    }
-
-    pub fn close(&mut self) {
-        self.socket.close();
     }
 }
 
@@ -111,18 +122,12 @@ impl BoundUdp {
         })
     }
 
-    #[inline]
-    pub fn can_recv(&self) -> bool {
-        self.with_socket(|socket| socket.can_recv())
-    }
-
     pub fn try_send(
         &self,
         buf: &[u8],
         to: Option<smoltcp::wire::IpEndpoint>,
     ) -> Result<usize, SystemError> {
         let remote = to.or(*self.remote.lock()).ok_or(ENOTCONN)?;
-
         let result = self.with_mut_socket(|socket| {
             if socket.can_send() && socket.send_slice(buf, remote).is_ok() {
                 log::debug!("send {} bytes", buf.len());

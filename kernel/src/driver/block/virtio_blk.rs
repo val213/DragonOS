@@ -38,7 +38,7 @@ use crate::{
         },
     },
     exception::{irqdesc::IrqReturn, IrqNumber},
-    filesystem::{kernfs::KernFSInode, mbr::MbrDiskPartionTable, sysfs::AttributeGroup},
+    filesystem::{kernfs::KernFSInode, mbr::MbrDiskPartionTable},
     init::initcall::INITCALL_POSTCORE,
     libs::{
         rwlock::{RwLockReadGuard, RwLockWriteGuard},
@@ -137,6 +137,7 @@ impl VirtIOBlkManager {
         BlockDevName::new(format!("vd{}", x), id)
     }
 
+    #[allow(dead_code)]
     pub fn free_id(&self, id: usize) {
         if id >= Self::MAX_DEVICES {
             return;
@@ -163,8 +164,14 @@ unsafe impl Sync for VirtIOBlkDevice {}
 
 impl VirtIOBlkDevice {
     pub fn new(transport: VirtIOTransport, dev_id: Arc<DeviceId>) -> Option<Arc<Self>> {
+        // 设置中断
+        if let Err(err) = transport.setup_irq(dev_id.clone()) {
+            error!("VirtIOBlkDevice '{dev_id:?}' setup_irq failed: {:?}", err);
+            return None;
+        }
+
         let devname = virtioblk_manager().alloc_id()?;
-        let irq = transport.irq().map(|irq| IrqNumber::new(irq.data()));
+        let irq = Some(transport.irq());
         let device_inner = VirtIOBlk::<HalImpl, VirtIOTransport>::new(transport);
         if let Err(e) = device_inner {
             error!("VirtIOBlkDevice '{dev_id:?}' create failed: {:?}", e);
@@ -474,9 +481,7 @@ impl KObject for VirtIOBlkDevice {
 #[unified_init(INITCALL_POSTCORE)]
 fn virtio_blk_driver_init() -> Result<(), SystemError> {
     let driver = VirtIOBlkDriver::new();
-    virtio_driver_manager()
-        .register(driver.clone() as Arc<dyn VirtIODriver>)
-        .map_err(|_| SystemError::EINVAL)?;
+    virtio_driver_manager().register(driver.clone() as Arc<dyn VirtIODriver>)?;
     unsafe {
         VIRTIO_BLK_DRIVER = Some(driver);
     }

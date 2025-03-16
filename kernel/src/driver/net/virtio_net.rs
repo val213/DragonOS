@@ -25,7 +25,7 @@ use crate::{
             device::{
                 bus::Bus,
                 driver::{Driver, DriverCommonData},
-                CommonAttrGroup, Device, DeviceCommonData, DeviceId, DeviceType, IdTable,
+                Device, DeviceCommonData, DeviceId, DeviceType, IdTable,
             },
             kobject::{KObjType, KObject, KObjectCommonData, KObjectState, LockedKObjectState},
             kset::KSet,
@@ -91,6 +91,12 @@ impl Debug for InnerVirtIONetDevice {
 
 impl VirtIONetDevice {
     pub fn new(transport: VirtIOTransport, dev_id: Arc<DeviceId>) -> Option<Arc<Self>> {
+        // 设置中断
+        if let Err(err) = transport.setup_irq(dev_id.clone()) {
+            error!("VirtIONetDevice '{dev_id:?}' setup_irq failed: {:?}", err);
+            return None;
+        }
+
         let driver_net: VirtIONet<HalImpl, VirtIOTransport, 2> =
             match VirtIONet::<HalImpl, VirtIOTransport, 2>::new(transport, 4096) {
                 Ok(net) => net,
@@ -251,13 +257,13 @@ impl Device for VirtIONetDevice {
     }
 
     fn attribute_groups(&self) -> Option<&'static [&'static dyn AttributeGroup]> {
-        Some(&[&CommonAttrGroup])
+        None
     }
 }
 
 impl VirtIODevice for VirtIONetDevice {
     fn handle_irq(&self, _irq: IrqNumber) -> Result<IrqReturn, SystemError> {
-        log::warn!("VirtioInterface: poll_ifaces_try_lock_onetime -> poll_ifaces");
+        // log::warn!("VirtioInterface: poll_ifaces_try_lock_onetime -> poll_ifaces");
         poll_ifaces();
         return Ok(IrqReturn::Handled);
     }
@@ -399,7 +405,7 @@ impl VirtioInterface {
             device_inner: VirtIONicDeviceInnerWrapper(UnsafeCell::new(device_inner)),
             locked_kobj_state: LockedKObjectState::default(),
             iface_name: format!("eth{}", iface_id),
-            iface_common: super::IfaceCommon::new(iface_id, iface),
+            iface_common: super::IfaceCommon::new(iface_id, true, iface),
             inner: SpinLock::new(InnerVirtIOInterface {
                 kobj_common: KObjectCommonData::default(),
                 device_common: DeviceCommonData::default(),
@@ -526,8 +532,14 @@ impl VirtioNetToken {
 }
 
 impl phy::Device for VirtIONicDeviceInner {
-    type RxToken<'a> = VirtioNetToken where Self: 'a;
-    type TxToken<'a> = VirtioNetToken where Self: 'a;
+    type RxToken<'a>
+        = VirtioNetToken
+    where
+        Self: 'a;
+    type TxToken<'a>
+        = VirtioNetToken
+    where
+        Self: 'a;
 
     fn receive(
         &mut self,
@@ -585,11 +597,11 @@ impl phy::TxToken for VirtioNetToken {
 impl phy::RxToken for VirtioNetToken {
     fn consume<R, F>(self, f: F) -> R
     where
-        F: FnOnce(&mut [u8]) -> R,
+        F: FnOnce(&[u8]) -> R,
     {
         // 为了线程安全，这里需要对VirtioNet进行加【写锁】，以保证对设备的互斥访问。
-        let mut rx_buf = self.rx_buffer.unwrap();
-        let result = f(rx_buf.packet_mut());
+        let rx_buf = self.rx_buffer.unwrap();
+        let result = f(rx_buf.packet());
         self.driver
             .inner
             .lock()
@@ -633,6 +645,7 @@ impl Iface for VirtioInterface {
     }
 
     fn poll(&self) {
+        // log::debug!("VirtioInterface: poll");
         self.iface_common.poll(self.device_inner.force_get_mut())
     }
 
@@ -727,9 +740,7 @@ impl KObject for VirtioInterface {
 #[unified_init(INITCALL_POSTCORE)]
 fn virtio_net_driver_init() -> Result<(), SystemError> {
     let driver = VirtIONetDriver::new();
-    virtio_driver_manager()
-        .register(driver.clone() as Arc<dyn VirtIODriver>)
-        .expect("Add virtio net driver failed");
+    virtio_driver_manager().register(driver.clone() as Arc<dyn VirtIODriver>)?;
     unsafe {
         VIRTIO_NET_DRIVER = Some(driver);
     }

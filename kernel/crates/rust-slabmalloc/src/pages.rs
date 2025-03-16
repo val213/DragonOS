@@ -255,6 +255,20 @@ pub trait AllocablePage {
         self.bitfield().clear_bit(idx);
         Ok(())
     }
+
+    /// 统计page中还可以分配多少个object
+    fn free_obj_count(&self) -> usize {
+        // 统计page中还可以分配多少个object
+        let mut free_obj_count = 0;
+
+        // 遍历page中的bitfield(用来统计内存分配情况的u64数组)
+        for b in self.bitfield().iter() {
+            let bitval = b.load(Ordering::Relaxed);
+            free_obj_count += bitval.count_zeros() as usize;
+        }
+
+        free_obj_count
+    }
 }
 
 /// Holds allocated data within a 4 KiB page.
@@ -289,10 +303,10 @@ impl<'a> ObjectPage<'a> {
 }
 
 // These needs some more work to be really safe...
-unsafe impl<'a> Send for ObjectPage<'a> {}
-unsafe impl<'a> Sync for ObjectPage<'a> {}
+unsafe impl Send for ObjectPage<'_> {}
+unsafe impl Sync for ObjectPage<'_> {}
 
-impl<'a> AllocablePage for ObjectPage<'a> {
+impl AllocablePage for ObjectPage<'_> {
     const SIZE: usize = OBJECT_PAGE_SIZE;
 
     fn bitfield(&self) -> &[AtomicU64; 8] {
@@ -317,7 +331,7 @@ impl<'a> Default for ObjectPage<'a> {
     }
 }
 
-impl<'a> fmt::Debug for ObjectPage<'a> {
+impl fmt::Debug for ObjectPage<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "ObjectPage")
     }

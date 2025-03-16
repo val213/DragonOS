@@ -48,10 +48,16 @@ qemu_trace_usb=trace:usb_xhci_reset,trace:usb_xhci_run,trace:usb_xhci_stop,trace
 
 # 根据架构设置qemu的加速方式
 if [ ${ARCH} == "i386" ] || [ ${ARCH} == "x86_64" ]; then
-    qemu_accel="kvm"
-    if [ $(uname) == Darwin ]; then
-        qemu_accel=hvf  
+  qemu_accel="kvm"
+  if [ $(uname) == Darwin ]; then
+    qemu_accel=hvf
+  else
+    # 判断系统kvm模块是否加载
+    if [ ! -e /dev/kvm ]; then
+      # kvm模块未加载，使用tcg加速
+      qemu_accel="tcg"
     fi
+  fi
 fi
 
 # uboot版本
@@ -59,7 +65,7 @@ UBOOT_VERSION="v2023.10"
 RISCV64_UBOOT_PATH="arch/riscv64/u-boot-${UBOOT_VERSION}-riscv64"
 
 
-DISK_NAME="disk-${ARCH}.img"
+DISK_NAME="disk-image-${ARCH}.img"
 
 QEMU=qemu-system-${ARCH}
 QEMU_DISK_IMAGE="../bin/${DISK_NAME}"
@@ -72,7 +78,8 @@ QEMU_MONITOR="-monitor stdio"
 QEMU_TRACE="${qemu_trace_std}"
 QEMU_CPU_FEATURES=""
 QEMU_RTC_CLOCK=""
-QEMU_SERIAL="-serial file:../serial_opt.txt"
+QEMU_SERIAL_LOG_FILE="../serial_opt.txt"
+QEMU_SERIAL="-serial file:${QEMU_SERIAL_LOG_FILE}"
 QEMU_DRIVE="id=disk,file=${QEMU_DISK_IMAGE},if=none"
 QEMU_ACCELARATE=""
 QEMU_ARGUMENT=""
@@ -82,7 +89,10 @@ BIOS_TYPE=""
 VIRTIO_BLK_DEVICE=false
 # 如果qemu_accel不为空
 if [ -n "${qemu_accel}" ]; then
-    QEMU_ACCELARATE="-machine accel=${qemu_accel} -enable-kvm "
+    QEMU_ACCELARATE=" -machine accel=${qemu_accel} "
+  if [ "${qemu_accel}" == "kvm" ]; then
+    QEMU_ACCELARATE+=" -enable-kvm "
+  fi
 fi
 
 if [ ${ARCH} == "i386" ] || [ ${ARCH} == "x86_64" ]; then
@@ -128,7 +138,7 @@ while true;do
               window)
               ;;
               nographic)
-              QEMU_SERIAL=" -serial mon:stdio "
+              QEMU_SERIAL=" -serial chardev:mux -monitor chardev:mux -chardev stdio,id=mux,mux=on,signal=off,logfile=${QEMU_SERIAL_LOG_FILE} "
               QEMU_MONITOR=""
               QEMU_ARGUMENT+=" --nographic "
               QEMU_ARGUMENT+=" -kernel ../bin/kernel/kernel.elf "
@@ -143,7 +153,7 @@ while true;do
 # ps: 下面这条使用tap的方式，无法dhcp获取到ip，暂时不知道为什么
 # QEMU_DEVICES="-device ahci,id=ahci -device ide-hd,drive=disk,bus=ahci.0 -net nic,netdev=nic0 -netdev tap,id=nic0,model=virtio-net-pci,script=qemu/ifup-nat,downscript=qemu/ifdown-nat -usb -device qemu-xhci,id=xhci,p2=8,p3=4 "
 QEMU_DEVICES+="${QEMU_DEVICES_DISK} "
-QEMU_DEVICES+=" -netdev user,id=hostnet0,hostfwd=tcp::12580-:12580,hostfwd=udp::12549-:12549 -device virtio-net-pci,vectors=5,netdev=hostnet0,id=net0 -usb -device qemu-xhci,id=xhci,p2=8,p3=4 " 
+QEMU_DEVICES+=" -netdev user,id=hostnet0,hostfwd=tcp::12580-:12580 -device virtio-net-pci,vectors=5,netdev=hostnet0,id=net0 -usb -device qemu-xhci,id=xhci,p2=8,p3=4 " 
 # E1000E
 # QEMU_DEVICES="-device ahci,id=ahci -device ide-hd,drive=disk,bus=ahci.0 -netdev user,id=hostnet0,hostfwd=tcp::12580-:12580 -net nic,model=e1000e,netdev=hostnet0,id=net0 -netdev user,id=hostnet1,hostfwd=tcp::12581-:12581 -device virtio-net-pci,vectors=5,netdev=hostnet1,id=net1 -usb -device qemu-xhci,id=xhci,p2=8,p3=4 " 
 QEMU_ARGUMENT+="-d ${QEMU_DISK_IMAGE} -m ${QEMU_MEMORY} -smp ${QEMU_SMP} -boot order=d ${QEMU_MONITOR} -d ${qemu_trace_std} "

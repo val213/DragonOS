@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, collections::BTreeMap, sync::Arc};
+use alloc::{collections::BTreeMap, sync::Arc};
 use log::{debug, info, warn};
 use smoltcp::{socket::dhcpv4, wire};
 use system_error::SystemError;
@@ -7,41 +7,23 @@ use crate::{
     driver::net::{Iface, Operstate},
     libs::rwlock::RwLockReadGuard,
     net::NET_DEVICES,
-    time::timer::{next_n_ms_timer_jiffies, Timer, TimerFunction},
+    time::{sleep::nanosleep, PosixTimeSpec},
 };
 
-/// The network poll function, which will be called by timer.
-///
-/// The main purpose of this function is to poll all network interfaces.
-#[derive(Debug)]
-#[allow(dead_code)]
-struct NetWorkPollFunc;
-
-impl TimerFunction for NetWorkPollFunc {
-    fn run(&mut self) -> Result<(), SystemError> {
-        poll_ifaces();
-        let next_time = next_n_ms_timer_jiffies(10);
-        let timer = Timer::new(Box::new(NetWorkPollFunc), next_time);
-        timer.activate();
-        return Ok(());
-    }
-}
-
 pub fn net_init() -> Result<(), SystemError> {
-    dhcp_query()?;
-    // Init poll timer function
-    // let next_time = next_n_ms_timer_jiffies(5);
-    // let timer = Timer::new(Box::new(NetWorkPollFunc), next_time);
-    // timer.activate();
-    return Ok(());
+    dhcp_query()
 }
 
 fn dhcp_query() -> Result<(), SystemError> {
     let binding = NET_DEVICES.write_irqsave();
-    log::debug!("binding: {:?}", *binding);
-    //由于现在os未实现在用户态为网卡动态分配内存，而lo网卡的id最先分配且ip固定不能被分配
-    //所以特判取用id为0的网卡（也就是virto_net）
-    let net_face = binding.get(&0).ok_or(SystemError::ENODEV)?.clone();
+
+    // Default iface, misspelled to net_face
+    let net_face = binding
+        .iter()
+        .find(|(_, iface)| iface.common().is_default_iface())
+        .unwrap()
+        .1
+        .clone();
 
     drop(binding);
 
@@ -56,10 +38,12 @@ fn dhcp_query() -> Result<(), SystemError> {
 
     let sockets = || net_face.sockets().lock_irqsave();
 
-    // let dhcp_handle = SOCKET_SET.lock_irqsave().add(dhcp_socket);
     let dhcp_handle = sockets().add(dhcp_socket);
+    defer::defer!({
+        sockets().remove(dhcp_handle);
+    });
 
-    const DHCP_TRY_ROUND: u8 = 10;
+    const DHCP_TRY_ROUND: u8 = 100;
     for i in 0..DHCP_TRY_ROUND {
         log::debug!("DHCP try round: {}", i);
         net_face.poll();
@@ -129,6 +113,14 @@ fn dhcp_query() -> Result<(), SystemError> {
                     .remove_default_ipv4_route();
             }
         }
+        // 在睡眠前释放锁
+        drop(binding);
+
+        let sleep_time = PosixTimeSpec {
+            tv_sec: 0,
+            tv_nsec: 50,
+        };
+        let _ = nanosleep(sleep_time)?;
     }
 
     return Err(SystemError::ETIMEDOUT);
@@ -145,99 +137,3 @@ pub fn poll_ifaces() {
         iface.poll();
     }
 }
-
-// /// 对ifaces进行轮询，最多对SOCKET_SET尝试times次加锁。
-// ///
-// /// @return 轮询成功，返回Ok(())
-// /// @return 加锁超时，返回SystemError::EAGAIN_OR_EWOULDBLOCK
-// /// @return 没有网卡，返回SystemError::ENODEV
-// pub fn poll_ifaces_try_lock(times: u16) -> Result<(), SystemError> {
-//     let mut i = 0;
-//     while i < times {
-//         let guard: RwLockReadGuard<BTreeMap<usize, Arc<dyn Iface>>> =
-//             NET_DEVICES.read_irqsave();
-//         if guard.len() == 0 {
-//             warn!("poll_ifaces: No net driver found!");
-//             // 没有网卡，返回错误
-//             return Err(SystemError::ENODEV);
-//         }
-//         for (_, iface) in guard.iter() {
-//             iface.poll();
-//         }
-//         return Ok(());
-//     }
-//     // 尝试次数用完，返回错误
-//     return Err(SystemError::EAGAIN_OR_EWOULDBLOCK);
-// }
-
-// /// 对ifaces进行轮询，最多对SOCKET_SET尝试一次加锁。
-// ///
-// /// @return 轮询成功，返回Ok(())
-// /// @return 加锁超时，返回SystemError::EAGAIN_OR_EWOULDBLOCK
-// /// @return 没有网卡，返回SystemError::ENODEV
-// pub fn poll_ifaces_try_lock_onetime() -> Result<(), SystemError> {
-//     let guard: RwLockReadGuard<BTreeMap<usize, Arc<dyn Iface>>> = NET_DEVICES.read_irqsave();
-//     if guard.len() == 0 {
-//         warn!("poll_ifaces: No net driver found!");
-//         // 没有网卡，返回错误
-//         return Err(SystemError::ENODEV);
-//     }
-//     for (_, iface) in guard.iter() {
-//         let _ = iface.poll();
-//     }
-//     send_event()?;
-//     return Ok(());
-// }
-
-// /// ### 处理轮询后的事件
-// fn send_event() -> Result<(), SystemError> {
-//     for (handle, socket_type) in .lock().iter() {
-
-//         let global_handle = GlobalSocketHandle::new_smoltcp_handle(handle);
-
-//         let handle_guard = HANDLE_MAP.read_irqsave();
-//         let item: Option<&super::socket::SocketHandleItem> = handle_guard.get(&global_handle);
-//         if item.is_none() {
-//             continue;
-//         }
-
-//         let handle_item = item.unwrap();
-//         let posix_item = handle_item.posix_item();
-//         if posix_item.is_none() {
-//             continue;
-//         }
-//         let posix_item = posix_item.unwrap();
-
-//         // 获取socket上的事件
-//         let mut events = SocketPollMethod::poll(socket_type, handle_item).bits() as u64;
-
-//         // 分发到相应类型socket处理
-//         match socket_type {
-//             smoltcp::socket::Socket::Raw(_) | smoltcp::socket::Socket::Udp(_) => {
-//                 posix_item.wakeup_any(events);
-//             }
-//             smoltcp::socket::Socket::Icmp(_) => unimplemented!("Icmp socket hasn't unimplemented"),
-//             smoltcp::socket::Socket::Tcp(inner_socket) => {
-//                 if inner_socket.is_active() {
-//                     events |= TcpSocket::CAN_ACCPET;
-//                 }
-//                 if inner_socket.state() == smoltcp::socket::tcp::State::Established {
-//                     events |= TcpSocket::CAN_CONNECT;
-//                 }
-//                 if inner_socket.state() == smoltcp::socket::tcp::State::CloseWait {
-//                     events |= EPollEventType::EPOLLHUP.bits() as u64;
-//                 }
-
-//                 posix_item.wakeup_any(events);
-//             }
-//             smoltcp::socket::Socket::Dhcpv4(_) => {}
-//             smoltcp::socket::Socket::Dns(_) => unimplemented!("Dns socket hasn't unimplemented"),
-//         }
-//         EventPoll::wakeup_epoll(
-//             &posix_item.epitems,
-//             EPollEventType::from_bits_truncate(events as u32),
-//         )?;
-//         drop(handle_guard);
-//     }
-//     Ok(())
-// }

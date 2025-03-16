@@ -311,6 +311,7 @@ pub enum DeviceType {
     PlatformDev,
     Char,
     Pci,
+    Other,
 }
 
 /// @brief: 设备标识符类型
@@ -507,7 +508,7 @@ impl DeviceManager {
         }
         let kobject_parent = self.get_device_parent(&device, deivce_parent)?;
         if let Some(ref kobj) = kobject_parent {
-            log::info!("kobject parent: {:?}", kobj.name());
+            log::debug!("kobject parent: {:?}", kobj.name());
         }
         if let Some(kobject_parent) = kobject_parent {
             // debug!(
@@ -1024,25 +1025,6 @@ impl core::hash::Hash for DeviceId {
 impl Eq for DeviceId {}
 
 impl IrqHandlerData for DeviceId {}
-
-/// sysfs下设备的通用属性组
-#[derive(Debug)]
-pub struct CommonAttrGroup;
-impl AttributeGroup for CommonAttrGroup {
-    fn name(&self) -> Option<&str> {
-        None
-    }
-    fn attrs(&self) -> &[&'static dyn Attribute] {
-        &[&UeventAttr]
-    }
-    fn is_visible(
-        &self,
-        _kobj: alloc::sync::Arc<dyn KObject>,
-        attr: &'static dyn Attribute,
-    ) -> Option<crate::filesystem::vfs::syscall::ModeType> {
-        Some(attr.mode())
-    }
-}
 
 lazy_static! {
     /// class_dir列表，通过parent kobject的name和class_dir的name来索引class_dir实例

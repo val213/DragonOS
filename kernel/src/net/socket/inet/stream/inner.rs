@@ -1,15 +1,14 @@
-use core::sync::atomic::{AtomicU32, AtomicUsize};
+use core::sync::atomic::AtomicUsize;
 
 use crate::libs::rwlock::RwLock;
 use crate::net::socket::EPollEventType;
 use crate::net::socket::{self, inet::Types};
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 use smoltcp;
 use system_error::SystemError::{self, *};
 
-use super::inet::UNSPECIFIED_LOCAL_ENDPOINT;
-
-pub const DEFAULT_METADATA_BUF_SIZE: usize = 1024;
+// pub const DEFAULT_METADATA_BUF_SIZE: usize = 1024;
 pub const DEFAULT_RX_BUF_SIZE: usize = 512 * 1024;
 pub const DEFAULT_TX_BUF_SIZE: usize = 512 * 1024;
 
@@ -30,13 +29,18 @@ where
 
 #[derive(Debug)]
 pub enum Init {
-    Unbound(smoltcp::socket::tcp::Socket<'static>),
+    Unbound(
+        (
+            Box<smoltcp::socket::tcp::Socket<'static>>,
+            smoltcp::wire::IpVersion,
+        ),
+    ),
     Bound((socket::inet::BoundInner, smoltcp::wire::IpEndpoint)),
 }
 
 impl Init {
-    pub(super) fn new() -> Self {
-        Init::Unbound(new_smoltcp_socket())
+    pub(super) fn new(ver: smoltcp::wire::IpVersion) -> Self {
+        Init::Unbound((Box::new(new_smoltcp_socket()), ver))
     }
 
     /// 传入一个已经绑定的socket
@@ -54,15 +58,18 @@ impl Init {
         local_endpoint: smoltcp::wire::IpEndpoint,
     ) -> Result<Self, SystemError> {
         match self {
-            Init::Unbound(socket) => {
-                let bound = socket::inet::BoundInner::bind(socket, &local_endpoint.addr)?;
+            Init::Unbound((socket, _)) => {
+                let bound = socket::inet::BoundInner::bind(*socket, &local_endpoint.addr)?;
                 bound
                     .port_manager()
                     .bind_port(Types::Tcp, local_endpoint.port)?;
                 // bound.iface().common().bind_socket()
                 Ok(Init::Bound((bound, local_endpoint)))
             }
-            Init::Bound(_) => Err(EINVAL),
+            Init::Bound(_) => {
+                log::debug!("Already Bound");
+                Err(EINVAL)
+            }
         }
     }
 
@@ -71,14 +78,14 @@ impl Init {
         remote_endpoint: smoltcp::wire::IpEndpoint,
     ) -> Result<(socket::inet::BoundInner, smoltcp::wire::IpEndpoint), (Self, SystemError)> {
         match self {
-            Init::Unbound(socket) => {
+            Init::Unbound((socket, ver)) => {
                 let (bound, address) =
-                    socket::inet::BoundInner::bind_ephemeral(socket, remote_endpoint.addr)
-                        .map_err(|err| (Self::new(), err))?;
+                    socket::inet::BoundInner::bind_ephemeral(*socket, remote_endpoint.addr)
+                        .map_err(|err| (Self::new(ver), err))?;
                 let bound_port = bound
                     .port_manager()
                     .bind_ephemeral_port(Types::Tcp)
-                    .map_err(|err| (Self::new(), err))?;
+                    .map_err(|err| (Self::new(ver), err))?;
                 let endpoint = smoltcp::wire::IpEndpoint::new(address, bound_port);
                 Ok((bound, endpoint))
             }
@@ -132,7 +139,12 @@ impl Init {
                 // -1 because the first one is already bound
                 let new_listen = socket::inet::BoundInner::bind(
                     new_listen_smoltcp_socket(listen_addr),
-                    &local.addr,
+                    listen_addr
+                        .addr
+                        .as_ref()
+                        .unwrap_or(&smoltcp::wire::IpAddress::from(
+                            smoltcp::wire::Ipv4Address::UNSPECIFIED,
+                        )),
                 )?;
                 inners.push(new_listen);
             }
@@ -151,7 +163,18 @@ impl Init {
         return Ok(Listening {
             inners,
             connect: AtomicUsize::new(0),
+            listen_addr,
         });
+    }
+
+    pub(super) fn close(&self) {
+        match self {
+            Init::Unbound(_) => {}
+            Init::Bound((inner, endpoint)) => {
+                inner.port_manager().unbind_port(Types::Tcp, endpoint.port);
+                inner.with_mut::<smoltcp::socket::tcp::Socket, _, _>(|socket| socket.close());
+            }
+        }
     }
 }
 
@@ -184,14 +207,21 @@ impl Connecting {
         self.inner.with_mut(f)
     }
 
-    pub fn into_result(self) -> (Inner, Option<SystemError>) {
+    pub fn into_result(self) -> (Inner, Result<(), SystemError>) {
         use ConnectResult::*;
         let result = *self.result.read_irqsave();
         match result {
-            Connecting => (Inner::Connecting(self), Some(EAGAIN_OR_EWOULDBLOCK)),
-            Connected => (Inner::Established(Established { inner: self.inner }), None),
-            Refused => (Inner::Init(Init::new_bound(self.inner)), Some(ECONNREFUSED)),
+            Connecting => (Inner::Connecting(self), Err(EAGAIN_OR_EWOULDBLOCK)),
+            Connected => (
+                Inner::Established(Established { inner: self.inner }),
+                Ok(()),
+            ),
+            Refused => (Inner::Init(Init::new_bound(self.inner)), Err(ECONNREFUSED)),
         }
+    }
+
+    pub unsafe fn into_established(self) -> Established {
+        Established { inner: self.inner }
     }
 
     /// Returns `true` when `conn_result` becomes ready, which indicates that the caller should
@@ -201,9 +231,9 @@ impl Connecting {
     /// _exactly_ once. The caller is responsible for not missing this event.
     #[must_use]
     pub(super) fn update_io_events(&self) -> bool {
-        if matches!(*self.result.read_irqsave(), ConnectResult::Connecting) {
-            return false;
-        }
+        // if matches!(*self.result.read_irqsave(), ConnectResult::Connecting) {
+        //     return false;
+        // }
 
         self.inner
             .with_mut(|socket: &mut smoltcp::socket::tcp::Socket| {
@@ -214,11 +244,14 @@ impl Connecting {
 
                 // Connected
                 if socket.can_send() {
+                    log::debug!("can send");
                     *result = ConnectResult::Connected;
                     return true;
                 }
                 // Connecting
                 if socket.is_open() {
+                    log::debug!("connecting");
+                    *result = ConnectResult::Connecting;
                     return false;
                 }
                 // Refused
@@ -235,12 +268,22 @@ impl Connecting {
                     .expect("A Connecting Tcp With No Local Endpoint")
             })
     }
+
+    pub fn get_peer_name(&self) -> smoltcp::wire::IpEndpoint {
+        self.inner
+            .with::<smoltcp::socket::tcp::Socket, _, _>(|socket| {
+                socket
+                    .remote_endpoint()
+                    .expect("A Connecting Tcp With No Remote Endpoint")
+            })
+    }
 }
 
 #[derive(Debug)]
 pub struct Listening {
     inners: Vec<socket::inet::BoundInner>,
     connect: AtomicUsize,
+    listen_addr: smoltcp::wire::IpListenEndpoint,
 }
 
 impl Listening {
@@ -254,23 +297,22 @@ impl Listening {
             return Err(EAGAIN_OR_EWOULDBLOCK);
         }
 
-        let (local_endpoint, remote_endpoint) = connected
-            .with::<smoltcp::socket::tcp::Socket, _, _>(|socket| {
-                (
-                    socket
-                        .local_endpoint()
-                        .expect("A Connected Tcp With No Local Endpoint"),
-                    socket
-                        .remote_endpoint()
-                        .expect("A Connected Tcp With No Remote Endpoint"),
-                )
-            });
+        let remote_endpoint = connected.with::<smoltcp::socket::tcp::Socket, _, _>(|socket| {
+            socket
+                .remote_endpoint()
+                .expect("A Connected Tcp With No Remote Endpoint")
+        });
 
         // log::debug!("local at {:?}", local_endpoint);
 
         let mut new_listen = socket::inet::BoundInner::bind(
-            new_listen_smoltcp_socket(local_endpoint),
-            &local_endpoint.addr,
+            new_listen_smoltcp_socket(self.listen_addr),
+            self.listen_addr
+                .addr
+                .as_ref()
+                .unwrap_or(&smoltcp::wire::IpAddress::from(
+                    smoltcp::wire::Ipv4Address::UNSPECIFIED,
+                )),
         )?;
 
         // swap the connected socket with the new_listen socket
@@ -286,7 +328,6 @@ impl Listening {
         });
 
         if let Some(position) = position {
-            // log::debug!("Can accept!");
             self.connect
                 .store(position, core::sync::atomic::Ordering::Relaxed);
             pollee.fetch_or(
@@ -294,7 +335,6 @@ impl Listening {
                 core::sync::atomic::Ordering::Relaxed,
             );
         } else {
-            // log::debug!("Can't accept!");
             pollee.fetch_and(
                 !EPollEventType::EPOLLIN.bits() as usize,
                 core::sync::atomic::Ordering::Relaxed,
@@ -303,13 +343,33 @@ impl Listening {
     }
 
     pub fn get_name(&self) -> smoltcp::wire::IpEndpoint {
-        self.inners[0].with::<smoltcp::socket::tcp::Socket, _, _>(|socket| {
-            if let Some(name) = socket.local_endpoint() {
-                return name;
-            } else {
-                return UNSPECIFIED_LOCAL_ENDPOINT;
-            }
-        })
+        smoltcp::wire::IpEndpoint::new(
+            self.listen_addr
+                .addr
+                .unwrap_or(smoltcp::wire::IpAddress::from(
+                    smoltcp::wire::Ipv4Address::UNSPECIFIED,
+                )),
+            self.listen_addr.port,
+        )
+    }
+
+    pub fn close(&self) {
+        log::debug!("Close Listening Socket");
+        let port = self.get_name().port;
+        for inner in self.inners.iter() {
+            inner.with_mut::<smoltcp::socket::tcp::Socket, _, _>(|socket| socket.close());
+        }
+        self.inners[0]
+            .iface()
+            .port_manager()
+            .unbind_port(Types::Tcp, port);
+    }
+
+    pub fn release(&self) {
+        // log::debug!("Release Listening Socket");
+        for inner in self.inners.iter() {
+            inner.release();
+        }
     }
 }
 
@@ -326,10 +386,6 @@ impl Established {
         self.inner.with_mut(f)
     }
 
-    pub fn with<R, F: Fn(&smoltcp::socket::tcp::Socket<'static>) -> R>(&self, f: F) -> R {
-        self.inner.with(f)
-    }
-
     pub fn close(&self) {
         self.inner
             .with_mut::<smoltcp::socket::tcp::Socket, _, _>(|socket| socket.close());
@@ -340,13 +396,13 @@ impl Established {
         self.inner.release();
     }
 
-    pub fn local_endpoint(&self) -> smoltcp::wire::IpEndpoint {
+    pub fn get_name(&self) -> smoltcp::wire::IpEndpoint {
         self.inner
             .with::<smoltcp::socket::tcp::Socket, _, _>(|socket| socket.local_endpoint())
             .unwrap()
     }
 
-    pub fn remote_endpoint(&self) -> smoltcp::wire::IpEndpoint {
+    pub fn get_peer_name(&self) -> smoltcp::wire::IpEndpoint {
         self.inner
             .with::<smoltcp::socket::tcp::Socket, _, _>(|socket| socket.remote_endpoint().unwrap())
     }
@@ -438,6 +494,15 @@ impl Inner {
             Inner::Listening(listen) => listen.inners[0]
                 .with_mut::<smoltcp::socket::tcp::Socket, _, _>(|socket| socket.recv_capacity()),
             Inner::Established(est) => est.with_mut(|socket| socket.recv_capacity()),
+        }
+    }
+
+    pub fn iface(&self) -> Option<&alloc::sync::Arc<dyn crate::driver::net::Iface>> {
+        match self {
+            Inner::Init(_) => None,
+            Inner::Connecting(conn) => Some(conn.inner.iface()),
+            Inner::Listening(listen) => Some(listen.inners[0].iface()),
+            Inner::Established(est) => Some(est.inner.iface()),
         }
     }
 }

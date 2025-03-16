@@ -50,11 +50,11 @@ impl phy::RxToken for LoopbackRxToken {
     ///
     /// ## 返回值
     /// 返回函数 `f` 在 `self.buffer` 上的调用结果。
-    fn consume<R, F>(mut self, f: F) -> R
+    fn consume<R, F>(self, f: F) -> R
     where
-        F: FnOnce(&mut [u8]) -> R,
+        F: FnOnce(&[u8]) -> R,
     {
-        f(self.buffer.as_mut_slice())
+        f(self.buffer.as_slice())
     }
 }
 
@@ -190,15 +190,21 @@ impl Clone for LoopbackDriver {
 }
 
 impl phy::Device for LoopbackDriver {
-    type RxToken<'a> = LoopbackRxToken where Self: 'a;
-    type TxToken<'a> = LoopbackTxToken where Self: 'a;
+    type RxToken<'a>
+        = LoopbackRxToken
+    where
+        Self: 'a;
+    type TxToken<'a>
+        = LoopbackTxToken
+    where
+        Self: 'a;
     /// ## 返回设备的物理层特性。
     /// lo设备的最大传输单元为65535，最大突发大小为1，传输介质默认为Ethernet
     fn capabilities(&self) -> phy::DeviceCapabilities {
         let mut result = phy::DeviceCapabilities::default();
         result.max_transmission_unit = 65535;
         result.max_burst_size = Some(1);
-        result.medium = smoltcp::phy::Medium::Ethernet;
+        result.medium = smoltcp::phy::Medium::Ip;
         return result;
     }
     /// ## Loopback驱动处理接受数据事件
@@ -265,6 +271,8 @@ pub struct InnerLoopbackInterface {
 }
 
 impl LoopbackInterface {
+    pub const DEVICE_NAME: &str = "lo";
+
     /// ## `new` 是一个公共函数，用于创建一个新的 `LoopbackInterface` 实例。
     /// 生成一个新的接口 ID。创建一个新的接口配置，设置其硬件地址和随机种子，使用接口配置和驱动器创建一个新的 `smoltcp::iface::Interface` 实例。
     /// 设置接口的 IP 地址为 127.0.0.1。
@@ -277,29 +285,44 @@ impl LoopbackInterface {
     /// 返回一个 `Arc<Self>`，即一个指向新创建的 `LoopbackInterface` 实例的智能指针。
     pub fn new(mut driver: LoopbackDriver) -> Arc<Self> {
         let iface_id = generate_iface_id();
-        let mut iface_config = smoltcp::iface::Config::new(HardwareAddress::Ethernet(
-            smoltcp::wire::EthernetAddress([0x02, 0x00, 0x00, 0x00, 0x00, 0x01]),
-        ));
+
+        // let hardware_addr = HardwareAddress::Ethernet(smoltcp::wire::EthernetAddress([
+        //     0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        // ]));
+
+        let hardware_addr = HardwareAddress::Ip;
+
+        let mut iface_config = smoltcp::iface::Config::new(hardware_addr);
+
         iface_config.random_seed = rand() as u64;
 
         let mut iface =
             smoltcp::iface::Interface::new(iface_config, &mut driver, Instant::now().into());
+
+        iface.set_any_ip(true);
+
+        let addr = IpAddress::v4(127, 0, 0, 1);
+        let cidr = IpCidr::new(addr, 8);
+
         //设置网卡地址为127.0.0.1
         iface.update_ip_addrs(|ip_addrs| {
-            for i in 1..=2 {
-                ip_addrs
-                    .push(IpCidr::new(IpAddress::v4(127, 0, 0, i), 8))
-                    .expect("Push ipCidr failed: full");
-            }
+            ip_addrs.push(cidr).expect("Push ipCidr failed: full");
         });
 
-        // iface.routes_mut().update(|routes_map| {
-        //     routes_map[0].
-        // });
+        iface.routes_mut().update(|routes_map| {
+            routes_map
+                .push(smoltcp::iface::Route {
+                    cidr,
+                    via_router: addr,
+                    preferred_until: None,
+                    expires_at: None,
+                })
+                .expect("Add default ipv4 route failed: full");
+        });
 
         Arc::new(LoopbackInterface {
             driver: LoopbackDriverWapper(UnsafeCell::new(driver)),
-            common: IfaceCommon::new(iface_id, iface),
+            common: IfaceCommon::new(iface_id, false, iface),
             inner: SpinLock::new(InnerLoopbackInterface {
                 netdevice_common: NetDeviceCommonData::default(),
                 device_common: DeviceCommonData::default(),
@@ -349,7 +372,7 @@ impl KObject for LoopbackInterface {
     }
 
     fn name(&self) -> String {
-        "lo".to_string()
+        Self::DEVICE_NAME.to_string()
     }
 
     fn set_name(&self, _name: String) {
@@ -448,7 +471,7 @@ impl Iface for LoopbackInterface {
     }
 
     fn iface_name(&self) -> String {
-        "lo".to_string()
+        Self::DEVICE_NAME.to_string()
     }
 
     /// 由于lo网卡设备不是实际的物理设备，其mac地址需要手动设置为一个默认值，这里默认为00:00:00:00:00
@@ -506,8 +529,7 @@ pub fn loopback_driver_init() {
 }
 
 /// ## lo网卡设备的注册函数
-//TODO: 现在先不用初始化宏进行注册，使virtonet排在网卡列表头，待网络子系统重构后再使用初始化宏并修复该bug
-// #[unified_init(INITCALL_DEVICE)]
+#[unified_init(INITCALL_DEVICE)]
 pub fn loopback_init() -> Result<(), SystemError> {
     loopback_probe();
     log::debug!("Successfully init loopback device");

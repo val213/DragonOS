@@ -1,7 +1,7 @@
 use crate::{
     arch::{
         ipc::signal::X86_64SignalArch,
-        syscall::nr::{SysCall, SYS_ARCH_PRCTL, SYS_RT_SIGRETURN},
+        syscall::nr::{SYS_ARCH_PRCTL, SYS_RT_SIGRETURN},
         CurrentIrqArch,
     },
     exception::InterruptArch,
@@ -53,26 +53,8 @@ macro_rules! syscall_return {
 
         if $show {
             let pid = ProcessManager::current_pcb().pid();
-            debug!("[SYS] [Pid: {:?}] [Retn: {:?}]", pid, ret as i64);
+            debug!("syscall return:pid={:?},ret= {:?}\n", pid, ret as isize);
         }
-
-        unsafe {
-            CurrentIrqArch::interrupt_disable();
-        }
-        return;
-    }};
-}
-
-macro_rules! normal_syscall_return {
-    ($val:expr, $regs:expr, $show:expr) => {{
-        let ret = $val;
-
-        if $show {
-            let pid = ProcessManager::current_pcb().pid();
-            debug!("[SYS] [Pid: {:?}] [Retn: {:?}]", pid, ret);
-        }
-
-        $regs.rax = ret.unwrap_or_else(|e| e.to_posix_errno() as usize) as u64;
 
         unsafe {
             CurrentIrqArch::interrupt_disable();
@@ -83,6 +65,8 @@ macro_rules! normal_syscall_return {
 
 #[no_mangle]
 pub extern "sysv64" fn syscall_handler(frame: &mut TrapFrame) {
+    // 系统调用进入时，把系统调用号存入errcode字段，以便在syscall_handler退出后，仍能获取到系统调用号
+    frame.errcode = frame.rax;
     let syscall_num = frame.rax as usize;
     // 防止sys_sched由于超时无法退出导致的死锁
     if syscall_num == SYS_SCHED {
@@ -105,38 +89,15 @@ pub extern "sysv64" fn syscall_handler(frame: &mut TrapFrame) {
     ];
     mfence();
     let pid = ProcessManager::current_pcb().pid();
-    let mut show = (syscall_num != SYS_SCHED) && (pid.data() >= 7);
-    // let mut show = true;
+    let show = false;
+    // let show = if syscall_num != SYS_SCHED && pid.data() >= 7 {
+    //     true
+    // } else {
+    //     false
+    // };
 
-    let to_print = SysCall::try_from(syscall_num);
-    if let Ok(to_print) = to_print {
-        use SysCall::*;
-        match to_print {
-            SYS_ACCEPT | SYS_ACCEPT4 | SYS_BIND | SYS_CONNECT | SYS_SHUTDOWN | SYS_LISTEN => {
-                show &= true;
-            }
-            SYS_RECVFROM | SYS_SENDTO | SYS_SENDMSG | SYS_RECVMSG => {
-                show &= true;
-            }
-            SYS_SOCKET | SYS_GETSOCKNAME | SYS_GETPEERNAME | SYS_SOCKETPAIR | SYS_SETSOCKOPT
-            | SYS_GETSOCKOPT => {
-                show &= true;
-            }
-            SYS_OPEN | SYS_OPENAT | SYS_CREAT | SYS_CLOSE => {
-                show &= true;
-            }
-            SYS_READ | SYS_WRITE | SYS_READV | SYS_WRITEV | SYS_PREAD64 | SYS_PWRITE64
-            | SYS_PREADV | SYS_PWRITEV | SYS_PREADV2 => {
-                show &= true;
-            }
-            _ => {
-                show &= false;
-            }
-        }
-        show = false;
-        if show {
-            debug!("[SYS] [Pid: {:?}] [Call: {:?}]", pid, to_print);
-        }
+    if show {
+        debug!("syscall: pid: {:?}, num={:?}\n", pid, syscall_num);
     }
 
     // Arch specific syscall
@@ -149,11 +110,28 @@ pub extern "sysv64" fn syscall_handler(frame: &mut TrapFrame) {
             );
         }
         SYS_ARCH_PRCTL => {
-            normal_syscall_return!(Syscall::arch_prctl(args[0], args[1]), frame, show);
+            syscall_return!(
+                Syscall::arch_prctl(args[0], args[1])
+                    .unwrap_or_else(|e| e.to_posix_errno() as usize),
+                frame,
+                show
+            );
         }
         _ => {}
     }
-    normal_syscall_return!(Syscall::handle(syscall_num, &args, frame), frame, show);
+    let mut syscall_handle = || -> u64 {
+        #[cfg(feature = "backtrace")]
+        {
+            Syscall::catch_handle(syscall_num, &args, frame)
+                .unwrap_or_else(|e| e.to_posix_errno() as usize) as u64
+        }
+        #[cfg(not(feature = "backtrace"))]
+        {
+            Syscall::handle(syscall_num, &args, frame)
+                .unwrap_or_else(|e| e.to_posix_errno() as usize) as u64
+        }
+    };
+    syscall_return!(syscall_handle(), frame, show);
 }
 
 /// 系统调用初始化

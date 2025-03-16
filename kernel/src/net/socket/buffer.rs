@@ -1,7 +1,7 @@
+#!(allow(unused))
 use alloc::vec::Vec;
 
-use alloc::{string::String, sync::Arc};
-use log::debug;
+use alloc::sync::Arc;
 use system_error::SystemError;
 
 use crate::libs::spinlock::SpinLock;
@@ -43,14 +43,14 @@ impl Buffer {
         let len = core::cmp::min(buf.len(), read_buffer.len());
         buf[..len].copy_from_slice(&read_buffer[..len]);
         let _ = read_buffer.split_off(len);
-        log::debug!("recv buf {}", String::from_utf8_lossy(buf));
+        // log::debug!("recv buf {}", String::from_utf8_lossy(buf));
 
         return Ok(len);
     }
 
     pub fn write_read_buffer(&self, buf: &[u8]) -> Result<usize, SystemError> {
         let mut buffer = self.read_buffer.lock_irqsave();
-        log::debug!("send buf {}", String::from_utf8_lossy(buf));
+        // log::debug!("send buf {}", String::from_utf8_lossy(buf));
         let len = buf.len();
         if self.metadata.buf_size - buffer.len() < len {
             return Err(SystemError::ENOBUFS);
@@ -76,6 +76,7 @@ impl Buffer {
 #[derive(Debug)]
 pub struct Metadata {
     /// 默认的元数据缓冲区大小
+    #[allow(dead_code)]
     metadata_buf_size: usize,
     /// 默认的缓冲区大小
     buf_size: usize,

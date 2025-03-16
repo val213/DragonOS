@@ -22,8 +22,6 @@ use log::{debug, error, warn};
 use system_error::SystemError;
 
 use super::{acpi_kset, AcpiManager};
-use crate::driver::base::uevent::kobject_uevent::kobject_uevent;
-use crate::driver::base::uevent::KobjectAction;
 static mut __HOTPLUG_KSET_INSTANCE: Option<Arc<KSet>> = None;
 static mut __ACPI_TABLES_KSET_INSTANCE: Option<Arc<KSet>> = None;
 static mut __ACPI_TABLES_DATA_KSET_INSTANCE: Option<Arc<KSet>> = None;

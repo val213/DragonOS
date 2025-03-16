@@ -7,11 +7,8 @@ use alloc::{
 
 use core::hash::Hash;
 
-use super::{
-    kobject::{
-        DynamicKObjKType, KObjType, KObject, KObjectManager, KObjectState, LockedKObjectState,
-    },
-    uevent::KobjUeventEnv,
+use super::kobject::{
+    DynamicKObjKType, KObjType, KObject, KObjectManager, KObjectState, LockedKObjectState,
 };
 use crate::{
     filesystem::kernfs::KernFSInode,
@@ -30,8 +27,6 @@ pub struct KSet {
     /// 与父节点有关的一些信息
     parent_data: RwLock<KSetParentData>,
     self_ref: Weak<KSet>,
-    /// kset用于发送uevent的操作函数集。kset能够发送它所包含的各种子kobj、孙kobj的消息，即kobj或其父辈、爷爷辈，都可以发送消息；优先父辈，然后是爷爷辈，以此类推
-    pub uevent_ops: Option<Arc<dyn KSetUeventOps>>,
 }
 
 impl Hash for KSet {
@@ -57,7 +52,6 @@ impl KSet {
             kobj_state: LockedKObjectState::new(None),
             parent_data: RwLock::new(KSetParentData::new(None, None)),
             self_ref: Weak::default(),
-            uevent_ops: Some(Arc::new(KSetUeventOpsDefault)),
         };
 
         let r = Arc::new(r);

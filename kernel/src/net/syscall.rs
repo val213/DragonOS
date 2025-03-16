@@ -1,29 +1,16 @@
-use core::{cmp::min, ffi::CStr};
-
-use acpi::address;
-use alloc::{boxed::Box, sync::Arc};
+use alloc::sync::Arc;
 use log::debug;
-use num_traits::{FromPrimitive, ToPrimitive};
-use smoltcp::wire;
 use system_error::SystemError::{self, *};
 
 use crate::{
-    filesystem::vfs::{
-        file::{File, FileMode},
-        syscall::{IoVec, IoVecs},
-        FileType,
-    },
-    libs::spinlock::SpinLockGuard,
-    mm::{verify_area, VirtAddr},
-    // net::socket::{netlink::af_netlink::NetlinkSock, AddressFamily},
+    filesystem::vfs::file::{File, FileMode},
     process::ProcessManager,
     syscall::Syscall,
 };
 
-use super::socket::{self, Endpoint, Socket};
-use super::socket::{unix::Unix, AddressFamily as AF};
+use super::socket::{self, unix::Unix, AddressFamily as AF, Endpoint};
 
-pub use super::syscall_util::*;
+pub use super::posix::*;
 
 /// Flags for socket, socketpair, accept4
 const SOCK_CLOEXEC: FileMode = FileMode::O_CLOEXEC;
@@ -41,18 +28,18 @@ impl Syscall {
         protocol: usize,
     ) -> Result<usize, SystemError> {
         // 打印收到的参数
-        log::debug!(
-            "socket: address_family={:?}, socket_type={:?}, protocol={:?}",
-            address_family,
-            socket_type,
-            protocol
-        );
+        // log::debug!(
+        //     "socket: address_family={:?}, socket_type={:?}, protocol={:?}",
+        //     address_family,
+        //     socket_type,
+        //     protocol
+        // );
         let address_family = socket::AddressFamily::try_from(address_family as u16)?;
-        let type_arg = SysArgSocketType::from_bits_truncate(socket_type as u32);
+        let type_arg = PosixArgsSocketType::from_bits_truncate(socket_type as u32);
         let is_nonblock = type_arg.is_nonblock();
         let is_close_on_exec = type_arg.is_cloexec();
-        let stype = socket::Type::try_from(type_arg)?;
-        log::debug!("type_arg {:?}  stype {:?}", type_arg, stype);
+        let stype = socket::PSOCK::try_from(type_arg)?;
+        // log::debug!("type_arg {:?}  stype {:?}", type_arg, stype);
 
         let inode = socket::create_socket(
             address_family,
@@ -87,38 +74,21 @@ impl Syscall {
         fds: &mut [i32],
     ) -> Result<usize, SystemError> {
         let address_family = AF::try_from(address_family as u16)?;
-        let socket_type = SysArgSocketType::from_bits_truncate(socket_type as u32);
-        let stype = socket::Type::try_from(socket_type)?;
+        let socket_type = PosixArgsSocketType::from_bits_truncate(socket_type as u32);
+        let stype = socket::PSOCK::try_from(socket_type)?;
 
         let binding = ProcessManager::current_pcb().fd_table();
         let mut fd_table_guard = binding.write();
 
         // check address family, only support AF_UNIX
         if address_family != AF::Unix {
+            log::warn!(
+                "only support AF_UNIX, {:?} with protocol {:?} is not supported",
+                address_family,
+                protocol
+            );
             return Err(SystemError::EAFNOSUPPORT);
         }
-
-        // 创建一对socket
-        // let inode0 = socket::create_socket(
-        //     address_family,
-        //     stype,
-        //     protocol as u32,
-        //     socket_type.is_nonblock(),
-        //     socket_type.is_cloexec(),
-        // )?;
-        // let inode1 = socket::create_socket(
-        //     address_family,
-        //     stype,
-        //     protocol as u32,
-        //     socket_type.is_nonblock(),
-        //     socket_type.is_cloexec(),
-        // )?;
-
-        // // 进行pair
-        // unsafe {
-        //     inode0.connect(socket::Endpoint::Inode(inode1.clone()))?;
-        //     inode1.connect(socket::Endpoint::Inode(inode0.clone()))?;
-        // }
 
         // 创建一对新的unix socket pair
         let (inode0, inode1) = Unix::new_pairs(stype)?;
@@ -143,11 +113,11 @@ impl Syscall {
         optname: usize,
         optval: &[u8],
     ) -> Result<usize, SystemError> {
-        let sol = socket::OptionsLevel::try_from(level as u32)?;
+        let sol = socket::PSOL::try_from(level as u32)?;
         let socket: Arc<socket::Inode> = ProcessManager::current_pcb()
             .get_socket(fd as i32)
             .ok_or(SystemError::EBADF)?;
-        debug!("setsockopt: level={:?}", level);
+        debug!("setsockopt: level = {:?} ", sol);
         return socket.set_option(sol, optname, optval).map(|_| 0);
     }
 
@@ -173,14 +143,14 @@ impl Syscall {
             .get_socket(fd as i32)
             .ok_or(EBADF)?;
 
-        let level = socket::OptionsLevel::try_from(level as u32)?;
+        use socket::{PSO, PSOL};
 
-        use socket::Options as SO;
-        use socket::OptionsLevel as SOL;
-        if matches!(level, SOL::SOCKET) {
-            let optname = SO::try_from(optname as u32).map_err(|_| ENOPROTOOPT)?;
+        let level = PSOL::try_from(level as u32)?;
+
+        if matches!(level, PSOL::SOCKET) {
+            let optname = PSO::try_from(optname as u32).map_err(|_| ENOPROTOOPT)?;
             match optname {
-                SO::SNDBUF => {
+                PSO::SNDBUF => {
                     // 返回发送缓冲区大小
                     unsafe {
                         *optval = socket.send_buffer_size() as u32;
@@ -188,7 +158,7 @@ impl Syscall {
                     }
                     return Ok(0);
                 }
-                SO::RCVBUF => {
+                PSO::RCVBUF => {
                     // 返回默认的接收缓冲区大小
                     unsafe {
                         *optval = socket.recv_buffer_size() as u32;
@@ -209,11 +179,11 @@ impl Syscall {
         // to be interpreted by the TCP protocol, level should be set to the
         // protocol number of TCP.
 
-        if matches!(level, SOL::TCP) {
-            let optname =
-                PosixTcpSocketOptions::try_from(optname as i32).map_err(|_| ENOPROTOOPT)?;
+        if matches!(level, PSOL::TCP) {
+            use socket::inet::stream::TcpOption;
+            let optname = TcpOption::try_from(optname as i32).map_err(|_| ENOPROTOOPT)?;
             match optname {
-                PosixTcpSocketOptions::Congestion => return Ok(0),
+                TcpOption::Congestion => return Ok(0),
                 _ => {
                     return Err(ENOPROTOOPT);
                 }
@@ -257,7 +227,7 @@ impl Syscall {
         let socket: Arc<socket::Inode> = ProcessManager::current_pcb()
             .get_socket(fd as i32)
             .ok_or(SystemError::EBADF)?;
-        log::debug!("bind: socket={:?}", socket);
+        // log::debug!("bind: socket={:?}", socket);
         socket.bind(endpoint)?;
         Ok(0)
     }
@@ -284,7 +254,7 @@ impl Syscall {
             Some(SockAddr::to_endpoint(addr, addrlen)?)
         };
 
-        let flags = socket::MessageFlag::from_bits_truncate(flags);
+        let flags = socket::PMSG::from_bits_truncate(flags);
 
         let socket: Arc<socket::Inode> = ProcessManager::current_pcb()
             .get_socket(fd as i32)
@@ -316,8 +286,7 @@ impl Syscall {
         let socket: Arc<socket::Inode> = ProcessManager::current_pcb()
             .get_socket(fd as i32)
             .ok_or(SystemError::EBADF)?;
-        log::info!("get socket: {:?}", socket);
-        let flags = socket::MessageFlag::from_bits_truncate(flags);
+        let flags = socket::PMSG::from_bits_truncate(flags);
 
         if addr.is_null() {
             let (n, _) = socket.recv_from(buf, flags, None)?;
@@ -351,29 +320,26 @@ impl Syscall {
     ///
     /// @return 成功返回接收的字节数，失败返回错误码
     pub fn recvmsg(fd: usize, msg: &mut MsgHdr, flags: u32) -> Result<usize, SystemError> {
-        todo!("recvmsg, fd={}, msg={:?}, flags={}", fd, msg, flags);
-        // // 检查每个缓冲区地址是否合法，生成iovecs
-        // let mut iovs = unsafe { IoVecs::from_user(msg.msg_iov, msg.msg_iovlen, true)? };
+        // 检查每个缓冲区地址是否合法，生成iovecs
+        let mut iovs = unsafe {
+            crate::filesystem::vfs::syscall::IoVecs::from_user(msg.msg_iov, msg.msg_iovlen, true)?
+        };
 
-        // let socket: Arc<socket::Inode> = ProcessManager::current_pcb()
-        //     .get_socket(fd as i32)
-        //     .ok_or(SystemError::EBADF)?;
+        let socket: Arc<socket::Inode> = ProcessManager::current_pcb()
+            .get_socket(fd as i32)
+            .ok_or(SystemError::EBADF)?;
 
-        // let flags = socket::MessageFlag::from_bits_truncate(flags as u32);
+        let flags = socket::PMSG::from_bits_truncate(flags);
 
-        // let mut buf = iovs.new_buf(true);
-        // // 从socket中读取数据
-        // let recv_size = socket.recv_msg(&mut buf, flags)?;
-        // drop(socket);
+        let mut buf = iovs.new_buf(true);
+        // 从socket中读取数据
+        let recv_size = socket.recv(&mut buf, flags)?;
+        drop(socket);
 
-        // // 将数据写入用户空间的iovecs
-        // iovs.scatter(&buf[..recv_size]);
+        // 将数据写入用户空间的iovecs
+        iovs.scatter(&buf[..recv_size]);
 
-        // // let sockaddr_in = SockAddr::from(endpoint);
-        // // unsafe {
-        // //     sockaddr_in.write_to_user(msg.msg_name, &mut msg.msg_namelen)?;
-        // // }
-        // return Ok(recv_size);
+        return Ok(recv_size);
     }
 
     /// @brief sys_listen系统调用的实际执行函数
@@ -399,7 +365,7 @@ impl Syscall {
         let socket: Arc<socket::Inode> = ProcessManager::current_pcb()
             .get_socket(fd as i32)
             .ok_or(SystemError::EBADF)?;
-        socket.shutdown(socket::ShutdownTemp::from_how(how))?;
+        socket.shutdown(how.try_into()?)?;
         return Ok(0);
     }
 
@@ -548,94 +514,5 @@ impl Syscall {
             sockaddr_in.write_to_user(addr, addrlen)?;
         }
         return Ok(0);
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, FromPrimitive, ToPrimitive)]
-pub enum PosixTcpSocketOptions {
-    /// Turn off Nagle's algorithm.
-    NoDelay = 1,
-    /// Limit MSS.
-    MaxSegment = 2,
-    /// Never send partially complete segments.
-    Cork = 3,
-    /// Start keeplives after this period.
-    KeepIdle = 4,
-    /// Interval between keepalives.
-    KeepIntvl = 5,
-    /// Number of keepalives before death.
-    KeepCnt = 6,
-    /// Number of SYN retransmits.
-    Syncnt = 7,
-    /// Lifetime for orphaned FIN-WAIT-2 state.
-    Linger2 = 8,
-    /// Wake up listener only when data arrive.
-    DeferAccept = 9,
-    /// Bound advertised window
-    WindowClamp = 10,
-    /// Information about this connection.
-    Info = 11,
-    /// Block/reenable quick acks.
-    QuickAck = 12,
-    /// Congestion control algorithm.
-    Congestion = 13,
-    /// TCP MD5 Signature (RFC2385).
-    Md5Sig = 14,
-    /// Use linear timeouts for thin streams
-    ThinLinearTimeouts = 16,
-    /// Fast retrans. after 1 dupack.
-    ThinDupack = 17,
-    /// How long for loss retry before timeout.
-    UserTimeout = 18,
-    /// TCP sock is under repair right now.
-    Repair = 19,
-    RepairQueue = 20,
-    QueueSeq = 21,
-    RepairOptions = 22,
-    /// Enable FastOpen on listeners
-    FastOpen = 23,
-    Timestamp = 24,
-    /// Limit number of unsent bytes in write queue.
-    NotSentLowat = 25,
-    /// Get Congestion Control (optional) info.
-    CCInfo = 26,
-    /// Record SYN headers for new connections.
-    SaveSyn = 27,
-    /// Get SYN headers recorded for connection.
-    SavedSyn = 28,
-    /// Get/set window parameters.
-    RepairWindow = 29,
-    /// Attempt FastOpen with connect.
-    FastOpenConnect = 30,
-    /// Attach a ULP to a TCP connection.
-    ULP = 31,
-    /// TCP MD5 Signature with extensions.
-    Md5SigExt = 32,
-    /// Set the key for Fast Open(cookie).
-    FastOpenKey = 33,
-    /// Enable TFO without a TFO cookie.
-    FastOpenNoCookie = 34,
-    ZeroCopyReceive = 35,
-    /// Notify bytes available to read as a cmsg on read.
-    /// 与TCP_CM_INQ相同
-    INQ = 36,
-    /// delay outgoing packets by XX usec
-    TxDelay = 37,
-}
-
-impl TryFrom<i32> for PosixTcpSocketOptions {
-    type Error = SystemError;
-
-    fn try_from(value: i32) -> Result<Self, Self::Error> {
-        match <Self as FromPrimitive>::from_i32(value) {
-            Some(p) => Ok(p),
-            None => Err(SystemError::EINVAL),
-        }
-    }
-}
-
-impl From<PosixTcpSocketOptions> for i32 {
-    fn from(val: PosixTcpSocketOptions) -> Self {
-        <PosixTcpSocketOptions as ToPrimitive>::to_i32(&val).unwrap()
     }
 }
