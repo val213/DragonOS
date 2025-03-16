@@ -1,0 +1,11 @@
+/home/dragonos/DragonOS/user/apps/test_ebpf/syscall_ebpf/target/debug/deps/libanstyle_parse-48e11a21b08f3f92.rmeta: /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-parse-0.2.6/src/lib.rs /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-parse-0.2.6/src/params.rs /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-parse-0.2.6/src/state/mod.rs /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-parse-0.2.6/src/state/definitions.rs /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-parse-0.2.6/src/state/table.rs
+
+/home/dragonos/DragonOS/user/apps/test_ebpf/syscall_ebpf/target/debug/deps/libanstyle_parse-48e11a21b08f3f92.rlib: /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-parse-0.2.6/src/lib.rs /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-parse-0.2.6/src/params.rs /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-parse-0.2.6/src/state/mod.rs /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-parse-0.2.6/src/state/definitions.rs /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-parse-0.2.6/src/state/table.rs
+
+/home/dragonos/DragonOS/user/apps/test_ebpf/syscall_ebpf/target/debug/deps/anstyle_parse-48e11a21b08f3f92.d: /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-parse-0.2.6/src/lib.rs /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-parse-0.2.6/src/params.rs /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-parse-0.2.6/src/state/mod.rs /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-parse-0.2.6/src/state/definitions.rs /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-parse-0.2.6/src/state/table.rs
+
+/home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-parse-0.2.6/src/lib.rs:
+/home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-parse-0.2.6/src/params.rs:
+/home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-parse-0.2.6/src/state/mod.rs:
+/home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-parse-0.2.6/src/state/definitions.rs:
+/home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-parse-0.2.6/src/state/table.rs:

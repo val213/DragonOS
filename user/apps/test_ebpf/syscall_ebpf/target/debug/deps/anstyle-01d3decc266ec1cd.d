@@ -1,0 +1,12 @@
+/home/dragonos/DragonOS/user/apps/test_ebpf/syscall_ebpf/target/debug/deps/libanstyle-01d3decc266ec1cd.rmeta: /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-1.0.10/src/lib.rs /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-1.0.10/src/macros.rs /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-1.0.10/src/color.rs /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-1.0.10/src/effect.rs /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-1.0.10/src/reset.rs /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-1.0.10/src/style.rs
+
+/home/dragonos/DragonOS/user/apps/test_ebpf/syscall_ebpf/target/debug/deps/libanstyle-01d3decc266ec1cd.rlib: /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-1.0.10/src/lib.rs /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-1.0.10/src/macros.rs /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-1.0.10/src/color.rs /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-1.0.10/src/effect.rs /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-1.0.10/src/reset.rs /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-1.0.10/src/style.rs
+
+/home/dragonos/DragonOS/user/apps/test_ebpf/syscall_ebpf/target/debug/deps/anstyle-01d3decc266ec1cd.d: /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-1.0.10/src/lib.rs /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-1.0.10/src/macros.rs /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-1.0.10/src/color.rs /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-1.0.10/src/effect.rs /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-1.0.10/src/reset.rs /home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-1.0.10/src/style.rs
+
+/home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-1.0.10/src/lib.rs:
+/home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-1.0.10/src/macros.rs:
+/home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-1.0.10/src/color.rs:
+/home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-1.0.10/src/effect.rs:
+/home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-1.0.10/src/reset.rs:
+/home/dragonos/.cargo/registry/src/rsproxy.cn-0dccff568467c15b/anstyle-1.0.10/src/style.rs:
