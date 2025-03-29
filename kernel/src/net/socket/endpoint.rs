@@ -1,4 +1,4 @@
-use crate::{filesystem::vfs::InodeId, net::socket};
+use crate::{filesystem::vfs::InodeId, net::{posix::SockAddrNl, socket}};
 use alloc::{string::String, sync::Arc};
 
 pub use smoltcp::wire::IpEndpoint;
@@ -17,6 +17,8 @@ pub enum Endpoint {
     Unixpath((InodeId, String)),
     /// Unix抽象端点
     Abspath((AbsHandle, String)),
+    /// Netlink端点
+    Netlink(NetlinkEndpoint),
 }
 
 /// @brief 链路层端点
@@ -40,5 +42,30 @@ impl LinkLayerEndpoint {
 impl From<IpEndpoint> for Endpoint {
     fn from(endpoint: IpEndpoint) -> Self {
         Self::Ip(endpoint)
+    }
+}
+
+
+/// @brief Netlink端点
+#[derive(Debug, Clone)]
+pub struct NetlinkEndpoint {
+    /// Netlink地址信息
+    pub addr: SockAddrNl,
+}
+
+impl NetlinkEndpoint {
+    /// @brief 创建一个新的Netlink端点
+    ///
+    /// @param addr Netlink地址信息
+    ///
+    /// @return 返回创建的Netlink端点
+    pub fn new(addr: SockAddrNl) -> Self {
+        Self { addr }
+    }
+}
+
+impl From<SockAddrNl> for NetlinkEndpoint {
+    fn from(addr: SockAddrNl) -> Self {
+        Self { addr }
     }
 }

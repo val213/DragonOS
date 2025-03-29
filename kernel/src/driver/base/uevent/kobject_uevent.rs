@@ -1,12 +1,10 @@
-use core::error;
-use core::ops::Deref;
-
 // https://code.dragonos.org.cn/xref/linux-6.1.9/lib/kobject_uevent.c
 use super::KObject;
 use super::KobjUeventEnv;
 use super::KobjectAction;
 use super::{UEVENT_BUFFER_SIZE, UEVENT_NUM_ENVP};
 use crate::driver::base::kobject::{KObjectManager, KObjectState};
+use crate::driver::base::kset::KSetUeventOps;
 use crate::init::initcall::INITCALL_POSTCORE;
 use crate::libs::mutex::Mutex;
 use crate::net::socket::netlink::af_netlink::NetlinkSock;
@@ -121,7 +119,7 @@ pub fn kobject_uevent_env(
 
     // 如果所属的kset的kset->filter返回的是0，过滤此次上报
     if let Some(kset_ref) = kset.as_ref() {
-        if let Some(uevent_ops) = &kset_ref.uevent_ops {
+        if let Some(uevent_ops) = kset_ref.uevent_ops() {
             if uevent_ops.filter() == Some(0) {
                 log::info!("filter caused the event to drop!");
                 return Ok(0);
@@ -132,7 +130,7 @@ pub fn kobject_uevent_env(
     // 判断所属的kset是否有合法的名称（称作subsystem，和前期的内核版本有区别），否则不允许上报uevent
     // originating subsystem
     let subsystem: String = if let Some(kset_ref) = kset.as_ref() {
-        if let Some(uevent_ops) = &kset_ref.uevent_ops {
+        if let Some(uevent_ops) = kset_ref.uevent_ops() {
             uevent_ops.uevent_name()
         } else {
             kset_ref.name()
@@ -204,7 +202,7 @@ pub fn kobject_uevent_env(
         }
     }
     if let Some(kset_ref) = kset.as_ref() {
-        if let Some(uevent_ops) = kset_ref.uevent_ops.as_ref() {
+        if let Some(uevent_ops) = kset_ref.uevent_ops() {
             if uevent_ops.uevent(&env) != 0 {
                 retval = uevent_ops.uevent(&env);
                 if retval.is_zero() {

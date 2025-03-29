@@ -1,8 +1,7 @@
 pub mod af_netlink;
-pub mod endpoint;
 pub mod netlink_proto;
 pub mod skbuff;
-use super::{family, Inode, Socket, Type};
+use super::{family, Inode, Socket, PSOCK};
 use af_netlink::{netlink_insert, Listeners, NetlinkFlags, NetlinkSock, NL_TABLE};
 use alloc::sync::Arc;
 use alloc::{slice, vec::Vec};
@@ -235,7 +234,7 @@ pub struct Netlink;
 
 impl family::Family for Netlink {
     /// 用户空间创建一个新的套接字的入口
-    fn socket(_stype: Type, _protocol: u32) -> Result<Arc<Inode>, SystemError> {
+    fn socket(_stype: PSOCK, _protocol: u32) -> Result<Arc<Inode>, SystemError> {
         let socket = create_netlink_socket(_protocol as usize)?;
         log::debug!("create netlink socket: {:?}", socket);
         Ok(Inode::new(socket))

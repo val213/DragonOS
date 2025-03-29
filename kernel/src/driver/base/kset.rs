@@ -10,6 +10,7 @@ use core::hash::Hash;
 use super::kobject::{
     DynamicKObjKType, KObjType, KObject, KObjectManager, KObjectState, LockedKObjectState,
 };
+use super::uevent::KobjUeventEnv;
 use crate::{
     filesystem::kernfs::KernFSInode,
     libs::rwlock::{RwLock, RwLockReadGuard, RwLockWriteGuard},
@@ -27,6 +28,7 @@ pub struct KSet {
     /// 与父节点有关的一些信息
     parent_data: RwLock<KSetParentData>,
     self_ref: Weak<KSet>,
+    uevent_ops: Option<KSetUeventOpsDefault>,
 }
 
 impl Hash for KSet {
@@ -52,6 +54,7 @@ impl KSet {
             kobj_state: LockedKObjectState::new(None),
             parent_data: RwLock::new(KSetParentData::new(None, None)),
             self_ref: Weak::default(),
+            uevent_ops: Some(KSetUeventOpsDefault::new()),
         };
 
         let r = Arc::new(r);
@@ -143,6 +146,13 @@ impl KSet {
 
     pub fn kobjects(&self) -> RwLockReadGuard<Vec<Weak<dyn KObject>>> {
         return self.kobjects.read();
+    }
+
+    pub fn uevent_ops(&self) -> Option<&KSetUeventOpsDefault> {
+        if let Some(ref ops) = self.uevent_ops {
+            return Some(ops);
+        }
+        return None;
     }
 }
 
@@ -255,5 +265,11 @@ impl KSetUeventOps for KSetUeventOpsDefault {
     fn uevent(&self, env: &KobjUeventEnv) -> i32 {
         let _ = env;
         todo!()
+    }
+}
+
+impl KSetUeventOpsDefault {
+    pub fn new() -> Self {
+        Self {}
     }
 }

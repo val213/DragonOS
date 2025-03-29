@@ -8,6 +8,7 @@ mod inode;
 mod posix;
 pub mod unix;
 mod utils;
+pub mod netlink;
 
 use crate::libs::wait_queue::WaitQueue;
 pub use base::Socket;

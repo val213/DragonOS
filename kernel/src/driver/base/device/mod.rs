@@ -269,6 +269,24 @@ impl DeviceCommonData {
     }
 }
 
+#[derive(Debug)]
+pub struct CommonAttrGroup;
+
+impl AttributeGroup for CommonAttrGroup {
+    fn name(&self) -> Option<&str> {
+        None
+    }
+    fn attrs(&self) -> &[&'static dyn Attribute] {
+        &[&UeventAttr]
+    }
+    fn is_visible(
+        &self,
+        _kobj: Arc<dyn KObject>,
+        _attr: &'static dyn Attribute,
+    ) -> Option<ModeType> {
+        None
+    }
+}
 // 暂定是不可修改的，在初始化的时候就要确定。以后可能会包括例如硬件中断包含的信息
 #[allow(dead_code)]
 #[derive(Debug, Clone)]

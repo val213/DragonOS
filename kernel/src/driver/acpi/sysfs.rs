@@ -1,7 +1,7 @@
 use crate::{
     driver::{
         acpi::acpi_manager,
-        base::{kobject::KObject, kset::KSet},
+        base::{kobject::KObject, kset::KSet, uevent::KobjectAction, uevent::kobject_uevent},
     },
     filesystem::{
         sysfs::{
@@ -115,18 +115,18 @@ impl AcpiManager {
             self.acpi_table_data_init(&header)?;
         }
         unsafe {
-            let _ = kobject_uevent(
+            let _ = kobject_uevent::kobject_uevent(
                 acpi_tables_kset.clone() as Arc<dyn KObject>,
                 KobjectAction::KOBJADD,
             );
-            let _ = kobject_uevent(
+            let _ = kobject_uevent::kobject_uevent(
                 __ACPI_TABLES_DATA_KSET_INSTANCE
                     .as_ref()
                     .map(|kset| kset.clone() as Arc<dyn KObject>)
                     .unwrap(),
                 KobjectAction::KOBJADD,
             );
-            let _ = kobject_uevent(
+            let _ = kobject_uevent::kobject_uevent(
                 __ACPI_TABLES_DYNAMIC_KSET_INSTANCE
                     .as_ref()
                     .map(|kset| kset.clone() as Arc<dyn KObject>)

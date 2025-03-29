@@ -1,4 +1,3 @@
-use super::endpoint::NetlinkEndpoint;
 use super::skbuff::netlink_overrun;
 use super::{NLmsgFlags, NLmsgType, NLmsghdr, VecExt};
 use crate::driver::base::uevent::kobject_uevent::UEVENT_SEQNUM;
@@ -10,7 +9,7 @@ use crate::libs::spinlock::{SpinLock, SpinLockGuard};
 use crate::net::socket::netlink::skbuff::SkBuff;
 use crate::net::socket::netlink::NetlinkState;
 use crate::net::socket::*;
-use crate::net::socket::{AddressFamily, Endpoint, Inode, MessageFlag, Socket};
+use crate::net::socket::{AddressFamily, Endpoint, Inode, PMSG, Socket};
 use crate::net::syscall::SockAddrNl;
 use alloc::sync::Arc;
 use alloc::{boxed::Box, vec::Vec};
@@ -266,7 +265,7 @@ impl Socket for NetlinkSock {
     fn send_to(
         &self,
         buffer: &[u8],
-        _flags: MessageFlag,
+        _flags: PMSG,
         address: Endpoint,
     ) -> Result<usize, SystemError> {
         log::debug!("NetlinkSock send_to");
@@ -275,7 +274,7 @@ impl Socket for NetlinkSock {
     fn recv_from(
         &self,
         msg: &mut [u8],
-        flags: MessageFlag,
+        flags: PMSG,
         _address: Option<Endpoint>,
     ) -> Result<(usize, Endpoint), SystemError> {
         log::debug!("NetlinkSock recv_from，self: {:?}", self);
@@ -289,7 +288,7 @@ impl Socket for NetlinkSock {
         log::warn!("recv_buffer_size is implemented to 0");
         0
     }
-    fn set_option(&self, level: OptionsLevel, name: usize, val: &[u8]) -> Result<(), SystemError> {
+    fn set_option(&self, level: PSOL, name: usize, val: &[u8]) -> Result<(), SystemError> {
         return self.netlink_setsockopt(level, name, val);
     }
 }
@@ -434,7 +433,7 @@ impl NetlinkSock {
     fn netlink_recv(
         &self,
         msg: &mut [u8],
-        flags: MessageFlag,
+        flags: PMSG,
     ) -> Result<(usize, Endpoint), SystemError> {
         log::info!("netlink_recv on : {:?}", self);
         let nlk = self.inner.lock();
@@ -447,7 +446,7 @@ impl NetlinkSock {
         // 从 buffer 中取出第一个消息
         let msg_kernel = buffer.remove(0);
         // 判断是否是带外消息，如果是带外消息，直接返回错误码
-        if flags == MessageFlag::OOB {
+        if flags == PMSG::OOB {
             log::warn!("netlink_recv: OOB message is not supported");
             return Err(SystemError::EOPNOTSUPP_OR_ENOTSUP);
         }
@@ -583,12 +582,12 @@ impl NetlinkSock {
     /// 设置 netlink 套接字的选项
     fn netlink_setsockopt(
         self: &Self,
-        level: OptionsLevel,
+        level: PSOL,
         optname: usize,
         optval: &[u8],
     ) -> Result<(), SystemError> {
         log::info!("netlink_setsockopt");
-        if level != OptionsLevel::NETLINK {
+        if level != PSOL::NETLINK {
             return Err(SystemError::ENOPROTOOPT);
         }
         let optlen = optval.len();
