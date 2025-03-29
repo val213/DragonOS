@@ -1,5 +1,5 @@
 use super::skbuff::netlink_overrun;
-use super::{NLmsgFlags, NLmsgType, NLmsghdr, VecExt};
+use super::{NLmsgFlags, NLmsgType, NLmsghdr, VecExt, MAX_LINKS};
 use crate::driver::base::uevent::kobject_uevent::UEVENT_SEQNUM;
 use crate::init::initcall::INITCALL_CORE;
 use crate::libs::mutex::Mutex;
@@ -40,8 +40,9 @@ bitflags! {
 }
 
 type NetlinkSockComparator = Arc<dyn Fn(&NetlinkSock) -> bool + Send + Sync>;
-/// 每一个netlink协议族都有一个NetlinkTable，用于保存该协议族的所有netlink套接字
-pub struct NetlinkTable {
+/// 每一个netlink协议族都有一个 NetlinkTable，用于保存该协议族的所有 netlink 套接字
+pub struct NetlinkTableItem {
+    /// 快速查找和管理套接字
     pub hash: HashMap<u32, Arc<NetlinkSock>>,
     listeners: Option<Listeners>,
     registered: u32,
@@ -52,9 +53,9 @@ pub struct NetlinkTable {
     pub unbind: Option<Arc<dyn Fn(i32) -> i32 + Send + Sync>>,
     pub compare: Option<NetlinkSockComparator>,
 }
-impl NetlinkTable {
-    fn new() -> NetlinkTable {
-        NetlinkTable {
+impl NetlinkTableItem {
+    fn new() -> NetlinkTableItem {
+        NetlinkTableItem {
             hash: HashMap::new(),
             listeners: Some(Listeners { masks: vec![0; 32] }),
             registered: 0,
@@ -88,7 +89,6 @@ impl NetlinkTable {
 
 // https://code.dragonos.org.cn/xref/linux-6.1.9/net/netlink/af_netlink.c#2916
 /// netlink 协议的最大数量
-const MAX_LINKS: usize = 32;
 #[unified_init(INITCALL_CORE)]
 /// netlink 协议的初始化函数
 fn netlink_proto_init() -> Result<(), SystemError> {
@@ -109,7 +109,7 @@ fn netlink_proto_init() -> Result<(), SystemError> {
 // https://code.dragonos.org.cn/xref/linux-6.1.9/net/netlink/af_netlink.c#572
 /// 内核套接字插入 nl_table
 pub fn netlink_insert(nlk: Arc<NetlinkSock>, portid: u32) -> Result<(), SystemError> {
-    let mut nl_table: RwLockWriteGuard<Vec<NetlinkTable>> = NL_TABLE.write();
+    let mut nl_table: RwLockWriteGuard<Vec<NetlinkTableItem>> = NL_TABLE.write();
     let index;
     {
         let mut nlk_guard = nlk.inner.lock();
@@ -159,7 +159,7 @@ fn netlink_autobind(nlk: Arc<NetlinkSock>, portid: &mut u32) {
 }
 // TODO: net namespace支持
 // https://code.dragonos.org.cn/xref/linux-6.1.9/net/netlink/af_netlink.c#532
-/// 在 netlink_table 中查找 netlink 套接字
+/// 在 netlink_table_item 中查找 netlink 套接字
 fn netlink_lookup(protocol: usize, portid: u32) -> Option<Arc<NetlinkSock>> {
     // todo: net 支持
     let nl_table = NL_TABLE.read();
@@ -494,11 +494,11 @@ impl NetlinkSock {
             return res;
         }
 
-        // 获取对应的 NetlinkTable
-        let netlink_table = &nl_table[protocol];
+        // 获取对应的 NetlinkTableItem
+        let netlink_table_item = &nl_table[protocol];
 
         // 检查 listeners 是否存在
-        if let Some(listeners) = &netlink_table.listeners {
+        if let Some(listeners) = &netlink_table_item.listeners {
             // 检查 group 是否在范围内
             if group > 0 && (group as usize - 1) < listeners.masks.len() {
                 res = listeners.masks[group as usize - 1] as i32;
@@ -521,8 +521,8 @@ impl NetlinkSock {
         log::info!("netlink_update_listeners");
         let nlk = self.inner.lock();
         let mut nl_table = NL_TABLE.write();
-        let netlink_table = &mut nl_table[nlk.protocol];
-        let listeners = netlink_table.listeners.as_mut().unwrap();
+        let netlink_table_item = &mut nl_table[nlk.protocol];
+        let listeners = netlink_table_item.listeners.as_mut().unwrap();
         listeners.masks.clear();
         log::info!("nlk.ngroups:{}", nlk.ngroups);
         listeners.masks.resize(nlk.ngroups as usize, 0);
@@ -566,14 +566,14 @@ impl NetlinkSock {
         log::info!("netlink_update_subscriptions");
         let mut nlk = self.inner.lock();
         let mut nl_table = NL_TABLE.write();
-        let netlink_table = &mut nl_table[nlk.protocol];
+        let netlink_table_item = &mut nl_table[nlk.protocol];
 
         if nlk.subscriptions != 0 && subscriptions == 0 {
             // 当前有订阅且新的订阅为零，删除绑定节点
-            netlink_table.mc_set.remove(&nlk.portid);
+            netlink_table_item.mc_set.remove(&nlk.portid);
         } else if nlk.subscriptions == 0 && subscriptions != 0 {
             // 当前没有订阅且新的订阅非零，添加绑定节点
-            netlink_table.mc_set.insert(nlk.portid);
+            netlink_table_item.mc_set.insert(nlk.portid);
         }
 
         // 更新订阅状态
@@ -613,8 +613,8 @@ impl NetlinkSock {
             NETLINK_ADD_MEMBERSHIP | NETLINK_DROP_MEMBERSHIP => {
                 let group = val as u64;
                 let mut nl_table = NL_TABLE.write();
-                let netlink_table = &mut nl_table[self.inner.lock().protocol];
-                let listeners = netlink_table.listeners.as_mut().unwrap();
+                let netlink_table_item = &mut nl_table[self.inner.lock().protocol];
+                let listeners = netlink_table_item.listeners.as_mut().unwrap();
                 let group = group - 1;
                 let mask = 1 << (group % 64);
                 let idx = group / 64;
@@ -762,7 +762,7 @@ impl NetlinkSock {
         let mc_set = nl_table[protocol].mc_set.clone();
         drop(nl_table);
 
-        // 遍历 netlink_table 中的所有 netlink 套接字，尝试向每一个套接字发送组播消息
+        // 遍历 netlink_table_item 中的所有 netlink 套接字，尝试向每一个套接字发送组播消息
         for portid in &mc_set {
             match netlink_lookup(protocol, *portid) {
                 Some(usk) => {
@@ -892,19 +892,19 @@ impl Listeners {
     }
 }
 
-fn initialize_netlink_table() -> RwLock<Vec<NetlinkTable>> {
+fn initialize_netlink_table() -> RwLock<Vec<NetlinkTableItem>> {
     let mut tables = Vec::with_capacity(MAX_LINKS);
     for _ in 0..MAX_LINKS {
-        tables.push(NetlinkTable::new());
+        tables.push(NetlinkTableItem::new());
     }
-    // uevent 协议注册
+    // 以下进行 Netlink 协议注册
     tables[KOBJECT_UEVENT].set_registered(1);
     RwLock::new(tables)
 }
 
 lazy_static! {
-    /// 一个维护全局的 NetlinkTable 向量，每一个元素代表一个 netlink 协议类型，最大数量为 MAX_LINKS
-    pub static ref NL_TABLE: RwLock<Vec<NetlinkTable>> = initialize_netlink_table();
+    /// 一个维护全局的 NL_TABLE 向量，每一个元素代表一个 netlink 协议类型，最大数量为 MAX_LINKS
+    pub static ref NL_TABLE: RwLock<Vec<NetlinkTableItem>> = initialize_netlink_table();
 }
 
 struct NetlinkBroadcastData<'a> {
