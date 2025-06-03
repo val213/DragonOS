@@ -25,6 +25,7 @@ use crate::{
         procfs::procfs_register_pid,
         vfs::{file::FileDescriptorVec, MAX_PATHLEN},
     },
+    libs::rand::rand_bytes,
     mm::{
         ucontext::{AddressSpace, UserStack},
         verify_area, MemoryManagementArch, VirtAddr,
@@ -50,10 +51,10 @@ pub struct PosixOldUtsName {
 
 impl PosixOldUtsName {
     pub fn new() -> Self {
-        const SYS_NAME: &[u8] = b"DragonOS";
+        const SYS_NAME: &[u8] = b"Linux";
         const NODENAME: &[u8] = b"DragonOS";
-        const RELEASE: &[u8] = env!("CARGO_PKG_VERSION").as_bytes();
-        const VERSION: &[u8] = env!("CARGO_PKG_VERSION").as_bytes();
+        const RELEASE: &[u8] = b"5.19.0";
+        const VERSION: &[u8] = b"5.19.0";
 
         #[cfg(target_arch = "x86_64")]
         const MACHINE: &[u8] = b"x86_64";
@@ -139,15 +140,17 @@ impl Syscall {
             .basic_mut()
             .set_name(ProcessControlBlock::generate_name(&path, &argv));
 
-        Self::do_execve(path, argv, envp, frame)?;
+        Self::do_execve(path.clone(), argv, envp, frame)?;
 
+        let pcb = ProcessManager::current_pcb();
         // 关闭设置了O_CLOEXEC的文件描述符
-        let fd_table = ProcessManager::current_pcb().fd_table();
+        let fd_table = pcb.fd_table();
         fd_table.write().close_on_exec();
         // debug!(
         //     "after execve: strong count: {}",
         //     Arc::strong_count(&ProcessManager::current_pcb())
         // );
+        pcb.set_execute_path(path);
 
         return Ok(());
     }
@@ -174,6 +177,8 @@ impl Syscall {
         // debug!("argv: {:?}, envp: {:?}", argv, envp);
         param.init_info_mut().args = argv;
         param.init_info_mut().envs = envp;
+        // // 生成16字节随机数
+        param.init_info_mut().rand_num = rand_bytes::<16>();
 
         // 把proc_init_info写到用户栈上
         let mut ustack_message = unsafe {
@@ -185,7 +190,7 @@ impl Syscall {
         };
         let (user_sp, argv_ptr) = unsafe {
             param
-                .init_info()
+                .init_info_mut()
                 .push_at(
                     // address_space
                     //     .write()
@@ -201,7 +206,7 @@ impl Syscall {
     }
 
     pub fn wait4(
-        pid: i64,
+        pid: i32,
         wstatus: *mut i32,
         options: i32,
         rusage: *mut c_void,
@@ -243,7 +248,7 @@ impl Syscall {
     ///
     /// - status: 退出状态
     pub fn exit(status: usize) -> ! {
-        ProcessManager::exit(status);
+        ProcessManager::exit((status & 0xff) << 8);
     }
 
     /// @brief 获取当前进程的pid
@@ -311,6 +316,8 @@ impl Syscall {
     pub fn setsid() -> Result<usize, SystemError> {
         let pcb = ProcessManager::current_pcb();
         let session = pcb.go_to_new_session()?;
+        let mut guard = pcb.sig_info_mut();
+        guard.set_tty(None);
         Ok(session.sid().into())
     }
 
@@ -334,7 +341,7 @@ impl Syscall {
 
     /// @brief 获取当前进程的父进程id
     ///
-    /// 若为initproc则ppid设置为0   
+    /// 若为initproc则ppid设置为0
     pub fn getppid() -> Result<Pid, SystemError> {
         let current_pcb = ProcessManager::current_pcb();
         return Ok(current_pcb.basic().ppid());

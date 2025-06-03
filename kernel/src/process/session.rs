@@ -16,13 +16,11 @@ pub type Sid = Pid;
 /// 系统中所有会话
 pub static ALL_SESSION: SpinLock<Option<HashMap<Sid, Arc<Session>>>> = SpinLock::new(None);
 
-#[derive(Debug)]
 pub struct Session {
     pub sid: Sid,
     pub session_inner: SpinLock<SessionInner>,
 }
 
-#[derive(Debug)]
 pub struct SessionInner {
     pub process_groups: BTreeMap<Pgid, Arc<ProcessGroup>>,
     pub leader: Option<Arc<ProcessControlBlock>>,
@@ -215,6 +213,6 @@ impl ProcessControlBlock {
         if let Some(session) = self.session() {
             return session.sid();
         }
-        return Sid::new(0);
+        return Sid::new(1);
     }
 }

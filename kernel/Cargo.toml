@@ -60,6 +60,7 @@ smoltcp = { version = "=0.11.0", default-features = false, features = [
     "proto-ipv4",
     "proto-ipv6",
 ] }
+syscall_table_macros = { path = "crates/syscall_table_macros" }
 system_error = { path = "crates/system_error" }
 uefi = { version = "=0.26.0", features = ["alloc"] }
 uefi-raw = "=0.5.0"
@@ -79,6 +80,7 @@ static-keys = { version = "=0.7" }
 
 defer = "0.2.1"
 cfg-if = { version = "1.0.0" }
+derive_builder = { version = "0.20.2", default-features = false, features = ["alloc"] }
 
 
 # target为x86_64时，使用下面的依赖
@@ -97,7 +99,7 @@ sbi-rt = { version = "=0.0.3", features = ["legacy"] }
 
 # target为loongarch64时，使用下面的依赖
 [target.'cfg(target_arch = "loongarch64")'.dependencies]
-loongArch64 = { git = "https://github.com/fslongjin/loongArch64", rev = "7af150e" }
+loongArch64 = "=0.2.5"
 
 # 由于unwinding库不支持loongarch64架构，因此需要排除该依赖项
 [target.'cfg(not(target_arch = "loongarch64"))'.dependencies]

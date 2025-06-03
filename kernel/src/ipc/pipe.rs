@@ -2,15 +2,17 @@ use core::sync::atomic::compiler_fence;
 
 use crate::{
     arch::ipc::signal::{SigCode, Signal},
-    filesystem::vfs::{
-        core::generate_inode_id, file::FileMode, syscall::ModeType, FilePrivateData, FileSystem,
-        FileType, IndexNode, Metadata, PollableInode,
+    filesystem::{
+        epoll::{event_poll::EventPoll, EPollEventType, EPollItem},
+        vfs::{
+            file::FileMode, syscall::ModeType, vcore::generate_inode_id, FilePrivateData,
+            FileSystem, FileType, IndexNode, Metadata, PollableInode,
+        },
     },
     libs::{
         spinlock::{SpinLock, SpinLockGuard},
         wait_queue::WaitQueue,
     },
-    net::event_poll::{EPollEventType, EPollItem, EventPoll},
     process::{ProcessFlags, ProcessManager, ProcessState},
     sched::SchedMode,
     time::PosixTimeSpec,
@@ -128,6 +130,7 @@ impl LockedPipeInode {
                 atime: PosixTimeSpec::default(),
                 mtime: PosixTimeSpec::default(),
                 ctime: PosixTimeSpec::default(),
+                btime: PosixTimeSpec::default(),
                 file_type: FileType::Pipe,
                 mode: ModeType::from_bits_truncate(0o666),
                 nlinks: 1,
@@ -287,7 +290,7 @@ impl IndexNode for LockedPipeInode {
         let pollflag = EPollEventType::from_bits_truncate(inner_guard.poll(&data)? as u32);
         drop(inner_guard);
         // 唤醒epoll中等待的进程
-        EventPoll::wakeup_epoll(&self.epitems, Some(pollflag))?;
+        EventPoll::wakeup_epoll(&self.epitems, pollflag)?;
 
         //返回读取的字节数
         return Ok(num);
@@ -476,7 +479,7 @@ impl IndexNode for LockedPipeInode {
 
         drop(inner_guard);
         // 唤醒epoll中等待的进程
-        EventPoll::wakeup_epoll(&self.epitems, Some(pollflag))?;
+        EventPoll::wakeup_epoll(&self.epitems, pollflag)?;
 
         // 返回写入的字节数
         return Ok(len);

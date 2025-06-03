@@ -31,7 +31,7 @@ use crate::{
     exception::InterruptArch,
     filesystem::{
         procfs::procfs_unregister_pid,
-        vfs::{file::FileDescriptorVec, FileType},
+        vfs::{file::FileDescriptorVec, FileType, IndexNode},
     },
     ipc::{
         signal::RestartBlock,
@@ -67,7 +67,7 @@ use crate::{
         cpu::{AtomicProcessorId, ProcessorId},
         kick_cpu,
     },
-    syscall::{user_access::clear_user, Syscall},
+    syscall::user_access::clear_user,
 };
 use timer::AlarmTimer;
 
@@ -386,7 +386,7 @@ impl ProcessManager {
                 return;
             }
             let parent_pcb = r.unwrap();
-            let r = Syscall::kill_process(parent_pcb.pid(), Signal::SIGCHLD);
+            let r = crate::ipc::kill::kill_process(parent_pcb.pid(), Signal::SIGCHLD);
             if r.is_err() {
                 warn!(
                     "failed to send kill signal to {:?}'s parent pcb {:?}",
@@ -404,6 +404,11 @@ impl ProcessManager {
     /// ## 参数
     ///
     /// - `exit_code` : 进程的退出码
+    ///
+    /// ## 注意
+    ///  对于正常退出的进程，状态码应该先左移八位，以便用户态读取的时候正常返回退出码；而对于被信号终止的进程，状态码则是最低七位，无需进行移位操作。
+    ///
+    ///  因此注意，传入的`exit_code`应该是已经完成了移位操作的
     pub fn exit(exit_code: usize) -> ! {
         // 关中断
         let _irq_guard = unsafe { CurrentIrqArch::save_and_disable_irq() };
@@ -718,7 +723,7 @@ pub struct ProcessControlBlock {
     thread: RwLock<ThreadInfo>,
 
     /// 进程文件系统的状态
-    fs: Arc<SpinLock<FsStruct>>,
+    fs: RwLock<Arc<FsStruct>>,
 
     ///闹钟定时器
     alarm_timer: SpinLock<Option<AlarmTimer>>,
@@ -737,6 +742,9 @@ pub struct ProcessControlBlock {
 
     /// 进程组
     process_group: Mutex<Weak<ProcessGroup>>,
+
+    /// 进程的可执行文件路径
+    executable_path: RwLock<String>,
 }
 
 impl ProcessControlBlock {
@@ -788,14 +796,7 @@ impl ProcessControlBlock {
             (Self::generate_pid(), ppid, cwd, cred, tty)
         };
 
-        let basic_info = ProcessBasicInfo::new(
-            Pgid::from(pid.into()),
-            ppid,
-            Sid::from(pid.into()),
-            name,
-            cwd,
-            None,
-        );
+        let basic_info = ProcessBasicInfo::new(ppid, name.clone(), cwd, None);
         let preempt_count = AtomicUsize::new(0);
         let flags = unsafe { LockFreeFlags::new(ProcessFlags::empty()) };
 
@@ -825,7 +826,7 @@ impl ProcessControlBlock {
             children: RwLock::new(Vec::new()),
             wait_queue: WaitQueue::default(),
             thread: RwLock::new(ThreadInfo::new()),
-            fs: Arc::new(SpinLock::new(FsStruct::new())),
+            fs: RwLock::new(Arc::new(FsStruct::new())),
             alarm_timer: SpinLock::new(None),
             robust_list: RwLock::new(None),
             nsproxy: Arc::new(RwLock::new(NsProxy::new())),
@@ -833,6 +834,7 @@ impl ProcessControlBlock {
             self_ref: Weak::new(),
             restart_block: SpinLock::new(None),
             process_group: Mutex::new(Weak::new()),
+            executable_path: RwLock::new(name),
         };
 
         pcb.sig_info.write().set_tty(tty);
@@ -1015,8 +1017,16 @@ impl ProcessControlBlock {
     }
 
     #[inline(always)]
-    pub fn fs_struct(&self) -> Arc<SpinLock<FsStruct>> {
-        self.fs.clone()
+    pub fn fs_struct(&self) -> Arc<FsStruct> {
+        self.fs.read().clone()
+    }
+
+    pub fn fs_struct_mut(&self) -> RwLockWriteGuard<Arc<FsStruct>> {
+        self.fs.write()
+    }
+
+    pub fn pwd_inode(&self) -> Arc<dyn IndexNode> {
+        self.fs.read().pwd()
     }
 
     /// 获取文件描述符表的Arc指针
@@ -1028,6 +1038,14 @@ impl ProcessControlBlock {
     #[inline(always)]
     pub fn cred(&self) -> Cred {
         self.cred.lock().clone()
+    }
+
+    pub fn set_execute_path(&self, path: String) {
+        *self.executable_path.write() = path;
+    }
+
+    pub fn execute_path(&self) -> String {
+        self.executable_path.read().clone()
     }
 
     /// 根据文件描述符序号，获取socket对象的Arc指针
@@ -1206,6 +1224,17 @@ impl ProcessControlBlock {
         *self.restart_block.lock() = restart_block;
         return Err(SystemError::ERESTART_RESTARTBLOCK);
     }
+
+    pub fn parent_pcb(&self) -> Option<Arc<ProcessControlBlock>> {
+        self.parent_pcb.read().upgrade()
+    }
+
+    pub fn is_exited(&self) -> bool {
+        self.sched_info
+            .inner_lock_read_irqsave()
+            .state()
+            .is_exited()
+    }
 }
 
 impl Drop for ProcessControlBlock {
@@ -1264,12 +1293,8 @@ impl ThreadInfo {
 /// 这个结构体保存进程的基本信息，主要是那些不会随着进程的运行而经常改变的信息。
 #[derive(Debug)]
 pub struct ProcessBasicInfo {
-    /// 当前进程的进程组id
-    pgid: Pgid,
     /// 当前进程的父进程的pid
     ppid: Pid,
-    /// 当前进程所属会话id
-    sid: Sid,
     /// 进程的名字
     name: String,
 
@@ -1286,18 +1311,14 @@ pub struct ProcessBasicInfo {
 impl ProcessBasicInfo {
     #[inline(never)]
     pub fn new(
-        pgid: Pgid,
         ppid: Pid,
-        sid: Sid,
         name: String,
         cwd: String,
         user_vm: Option<Arc<AddressSpace>>,
     ) -> RwLock<Self> {
         let fd_table = Arc::new(RwLock::new(FileDescriptorVec::new()));
         return RwLock::new(Self {
-            pgid,
             ppid,
-            sid,
             name,
             cwd,
             user_vm,
@@ -1305,24 +1326,8 @@ impl ProcessBasicInfo {
         });
     }
 
-    pub fn pgid(&self) -> Pgid {
-        return self.pgid;
-    }
-
-    pub fn set_pgid(&mut self, pgid: Pgid) {
-        self.pgid = pgid;
-    }
-
     pub fn ppid(&self) -> Pid {
         return self.ppid;
-    }
-
-    pub fn sid(&self) -> Sid {
-        return self.sid;
-    }
-
-    pub fn set_sid(&mut self, sid: Sid) {
-        self.sid = sid;
     }
 
     pub fn name(&self) -> &str {
@@ -1574,8 +1579,8 @@ pub struct KernelStack {
 }
 
 impl KernelStack {
-    pub const SIZE: usize = 0x4000;
-    pub const ALIGN: usize = 0x4000;
+    pub const SIZE: usize = 0x8000;
+    pub const ALIGN: usize = 0x8000;
 
     pub fn new() -> Result<Self, SystemError> {
         return Ok(Self {

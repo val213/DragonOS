@@ -21,7 +21,6 @@ SECTIONS
 		*(.bootstrap.*)
 		. = ALIGN(4096);
 		*(.initial_pgtable_section)
-		. = ALIGN(4096);
 	}
 
 
@@ -68,15 +67,25 @@ SECTIONS
 	. = ALIGN(32768);
 	
 	trace_point_start_pa = .;
-	.tracepoint (trace_point_start_pa): AT(trace_point_start_pa - KERNEL_VMA)
+	.tracepoint (trace_point_start_pa):
     {
         _tracepoint = .;
         *(.tracepoint)
         *(.tracepoint.*)
         _etracepoint = .;
     }
-    . = ALIGN(32768);
 
+	. = ALIGN(4096);
+	syscall_table_start_pa = .;
+	.syscall_table (syscall_table_start_pa):
+    {
+        _syscall_table = .;
+        *(.syscall_table)
+		*(.syscall_table.*)
+        _esyscall_table = .;
+    }
+
+    . = ALIGN(32768);
 	init_proc_union_start_pa = .;
 	.data.init_proc_union (init_proc_union_start_pa):
 	 { *(.data.init_proc_union) }
